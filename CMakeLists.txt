@@ -9,7 +9,9 @@ cmake_minimum_required(VERSION 3.28)
 set(BOARD nucleo_wb55rg)
 set(BOARD_FLASH_RUNNER jlink)
 
-set(ZEPHYR_EXTRA_MODULES drivers/cad_qspi)
+# set(ZEPHYR_EXTRA_MODULES drivers/cad_qspi)
+# set(ZEPHYR_EXTRA_MODULES drivers/ad_4002)
+
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(app)

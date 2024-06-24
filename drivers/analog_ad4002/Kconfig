@@ -1,0 +1,25 @@
+
+DT_STM32_SPI_HAS_DMA := $(dt_compat_any_has_prop,st_stm32_spi,dmas)
+
+menuconfig AD4002
+    bool "Analog AD4002 SPI Device Driver"
+    select SPI
+    select SPI_STM32
+    select SPI_STM32_DMA if $(DT_STM32_SPI_HAS_DMA)
+    help
+        Enable STM32 SPI and DMA
+
+
+if AD4002
+
+module = AD4002
+module-str = AD4002
+source "subsys/logging/Kconfig.template.log_config"
+
+config AD4002_SPI_INIT_PRIORITY
+    int "AD4002 SPI INITIALIZATION PRIORITY"
+    default 90
+    help
+        AD4002 SPI peripheral initialization priority
+
+endif

@@ -3,4 +3,5 @@
 
 menu "Drivers"
 rsource "cad_qspi/Kconfig"
+rsource "analog_ad4002/Kconfig"
 endmenu

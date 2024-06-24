@@ -1,0 +1,16 @@
+description: |
+
+  Analog Devices AD4002 ADC, SPI binding
+
+  Driver bindings for controlling an AD4002 or compatible ADC with a SPI master.
+
+  The SPI driver should be usable as long as a zephyr SPI API driver
+  is available for your board. 
+  
+compatible: "analog,ad4002"
+
+include: [spi-device.yaml, base.yaml]
+
+properties:
+  default_property:
+    type: boolean

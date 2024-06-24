@@ -16,6 +16,7 @@
         my-ccdrive = &ccDrive;
         my-cnvdrive = &cnvDrive;
         my-qspi = &quadspi;
+        ad4002-ch1 = &ad4002_1;
     };
 
 };
@@ -29,13 +30,21 @@
 
 #define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_32BITS | STM32_DMA_PERIPH_32BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
 
-&quadspi {
-    compatible = "cad,stm32-qspi";
-    pinctrl-0 = <&quadspi_clk_pb10 &quadspi_bk1_ncs_pb11 &quadspi_bk1_io0_pb9 &quadspi_bk1_io1_pb8 &quadspi_bk1_io2_pa7 &quadspi_bk1_io3_pa6>;
-    pinctrl-names = "default";
-    //dmas = <&dma1 5 20 STM32_DMA_RX_FLAGS>; // DMA1, channel 5, interrupt 20 corresponds to the QSPI peripheral
-    //dma-names = "rx";
-    status = "okay";
+&spi1 {
+	status = "okay";
+	pinctrl-0 = < &spi1_nss_pa4 &spi1_sck_pa5 &spi1_miso_pb4 &spi1_mosi_pa7 >; // Potentially can omit nss and mosi if not using
+	pinctrl-names = "default";
+	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX
+    dma-names = "rx";
+	
+	ad4002_1: ad4002@0{
+        reg = <0>; // Ignored, but necessary for SPI bindings
+		compatible = "analog,ad4002";
+		status = "okay";
+        spi-max-frequency = <64000000>;
+        duplex = <2048>;  // Half Duplex
+        spi-cpha;
+	};
 };
 
 &dma1 {
