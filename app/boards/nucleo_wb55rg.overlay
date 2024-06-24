@@ -1,0 +1,94 @@
+/ {
+	pwmdrives: pwmdrives {
+		compatible = "pwm-leds";
+		status = "okay";
+
+		ccDrive: ccDrive {
+			pwms = <&pwm16 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
+		};
+
+        cnvDrive: cnvDrive {
+            pwms = <&pwm2 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
+        };
+	};
+
+    aliases {
+        my-ccdrive = &ccDrive;
+        my-cnvdrive = &cnvDrive;
+        my-qspi = &quadspi;
+    };
+
+};
+
+&usart1{
+    stop-bits = "1";
+    parity = "none";
+    data-bits = <8>;
+    status = "okay";
+};
+
+#define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_32BITS | STM32_DMA_PERIPH_32BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
+
+&quadspi {
+    compatible = "cad,stm32-qspi";
+    pinctrl-0 = <&quadspi_clk_pb10 &quadspi_bk1_ncs_pb11 &quadspi_bk1_io0_pb9 &quadspi_bk1_io1_pb8 &quadspi_bk1_io2_pa7 &quadspi_bk1_io3_pa6>;
+    pinctrl-names = "default";
+    //dmas = <&dma1 5 20 STM32_DMA_RX_FLAGS>; // DMA1, channel 5, interrupt 20 corresponds to the QSPI peripheral
+    //dma-names = "rx";
+    status = "okay";
+};
+
+&dma1 {
+    status = "okay";
+};
+
+
+&clk_hse {
+	clock-frequency = <DT_FREQ_M(32)>; /* X1 32MHz oscillator with /2 prescalar */
+	//status = "okay"; // Already enabled by nucleo
+};
+
+&clk_lsi1 {
+	status = "disabled"; // Enabled by nucleo
+};
+
+// This sets the PLL source to be HSE and sets the output frequency to be 64 MHz (max). Not configured by nucleo
+&pll {
+	div-m = <2>;
+	mul-n = <8>;
+	div-p = <2>;
+	div-q = <2>;
+	div-r = <2>;
+	clocks = <&clk_hse>;
+	status = "okay";
+};
+
+// This sets the system clock source as the PLL and defines the clock frequency as 64 MHz. 
+&rcc {
+	clocks = <&pll>; //nucleo has set to hse so overwrite
+	clock-frequency = <DT_FREQ_M(64)>;
+    //apb1-prescaler = <1>; // Commented out sections are already written by nucleo
+    //apb2-prescaler = <1>;
+    //cpu1-prescaler = <1>;
+    cpu2-prescaler = <2>;
+    //ahb4-prescaler = <1>;
+};
+
+&timers2 {
+    status = "okay";
+    pwm2: pwm {
+        compatible = "st,stm32-pwm";
+        status = "okay";
+        pinctrl-0 = <&tim2_ch1_pa15>;
+        pinctrl-names = "default";
+    };
+};
+
+&timers16 {
+    status = "okay";
+    pwm16: pwm {
+        status = "okay";
+        pinctrl-0 = <&tim16_ch1n_pb6>;
+        pinctrl-names = "default";
+    };
+};

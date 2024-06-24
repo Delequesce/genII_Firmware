@@ -1,0 +1,25 @@
+
+DT_STM32_QUADSPI_HAS_DMA := $(dt_nodelabel_has_prop,quadspi,dmas)
+
+menuconfig CAD_STM32_QSPI
+    bool "Custom STM32_QSPI Driver"
+    select USE_STM32_HAL_QSPI
+    select DMA if $(DT_STM32_QUADSPI_HAS_DMA)
+    select USE_STM32_HAL_DMA if $(DT_STM32_QUADSPI_HAS_DMA)
+    help
+        Enable QSPI General Read Interface on STM32 Processors
+
+
+if CAD_STM32_QSPI
+
+module = CAD_STM32_QSPI
+module-str = CAD_STM32_QSPI
+source "subsys/logging/Kconfig.template.log_config"
+
+config QSPI_INIT_PRIORITY
+    int "QSPI init priority"
+    default 90
+    help
+        Quadspi peripheral initialization priority
+
+endif

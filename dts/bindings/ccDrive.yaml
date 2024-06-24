@@ -1,0 +1,10 @@
+description: PWM-driven clotchip driver
+compatible: "ccDrive"
+
+include: base.yaml
+
+properties:
+  pwms:
+    required: true
+    type: phandle-array
+    description: PWM specifier driving the clotchip
