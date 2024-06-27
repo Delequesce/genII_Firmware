@@ -3,12 +3,16 @@ DT_STM32_SPI_HAS_DMA := $(dt_compat_any_has_prop,st_stm32_spi,dmas)
 
 menuconfig AD4002
     bool "Analog AD4002 SPI Device Driver"
+    depends on DT_HAS_ST_STM32_PWM_ENABLED
     select SPI
     select SPI_STM32
     select SPI_STM32_DMA if $(DT_STM32_SPI_HAS_DMA)
-    select PWM_STM32_CUSTOM_TRIGGER
+    select PWM
+	select USE_STM32_LL_TIM
+	select USE_STM32_LL_RCC if SOC_SERIES_STM32F4X || SOC_SERIES_STM32F7X || SOC_SERIES_STM32H7X
+	select RESET
     help
-        Enable STM32 SPI and DMA
+        Enable STM32 SPI, PWM, and DMA for AD4002
 
 if AD4002
 
@@ -21,5 +25,20 @@ config AD4002_SPI_INIT_PRIORITY
     default 90
     help
         AD4002 SPI peripheral initialization priority
+
+endif
+
+
+if (PWM || PWM_STM32_CUSTOM_TRIGGER)
+
+module = PWM
+module-str = pwm
+source "subsys/logging/Kconfig.template.log_config"
+
+config PWM_INIT_PRIORITY
+	int "PWM initialization priority"
+	default KERNEL_INIT_PRIORITY_DEVICE
+	help
+	  System initialization priority for PWM drivers.
 
 endif

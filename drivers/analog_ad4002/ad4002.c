@@ -6,8 +6,8 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 #include <app/drivers/ad4002.h>
-#include <app/drivers/pwm_stm32_custom_trigger.h>
 #include <zephyr/irq.h>
+#include <zephyr/drivers/pwm.h>
 #include <stm32_ll_tim.h>
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
 
@@ -40,21 +40,21 @@ static int analog_ad4002_continuous_read(const struct device *dev, const struct 
 	cfg->rx_buffer = rx_buffer;
 	
 	/* Setup PWM CNV Signal */
-	/*ret = pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
+	ret = pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
 	if (ret < 0){
 		LOG_ERR("Error %d: failed to set convert signal\n", ret);
-		return 0;
+		return -1;
 	}
-	return 0;*/
+	return 0;
 }
 
 /* Internal Function to Start to Read Data following CNV interrupt */
-static int analog_ad4002_read(const struct device *dev){
+static void analog_ad4002_read(const struct device *dev){
 
 	int ret;
 	const struct ad4002_config *cfg = dev->config;
-	ret = spi_read_dt(&cfg->spi_spec, cfg->rx_buffer);
-	return ret; 
+	spi_read_dt(&cfg->spi_spec, cfg->rx_buffer);
+	printk("Data obtained: %d", (*cfg->rx_buffer));
 }
 
 static int ad4002_init(const struct device *dev){
@@ -98,7 +98,7 @@ void pwm_irq_handler(const struct device *dev)
             LL_TIM_ClearFlag_CC1(timer);		
         /* Custom CC Interrupt Code */   							
         LOG_INF("Capture Compare Interrupt Triggered"); 
-		/*analog_ad4002_read(dev);*/
+		analog_ad4002_read(dev);
 		return;													
 	}
 	/* TIM Update event */
@@ -128,7 +128,7 @@ static const struct ad4002_driver_api ad4002_api = {
 			    DT_IRQ(PWM_PARENT_TIMER(index), priority),			  	\
 			    pwm_irq_handler,				  						\
 			    DEVICE_DT_INST_GET(index),				  				\
-			    0);							                			\
+			    IRQ_ZERO_LATENCY);							                			\
 		irq_enable(DT_IRQN(PWM_PARENT_TIMER(index)));				  	\
     };         															\
 																		\

@@ -45,16 +45,20 @@ int main(void)
 	my_spi_buffer[0].len = RX_BUFFER_LENGTH;
 	const struct spi_buf_set rx_buff = {my_spi_buffer, 1};
 
-    printk("Generating PWM Signals\n");
-    ret = startDriveSignal();
+    if (startDriveSignal() < 0){
+        return -1;
+    }
 
+    /* Begin Interrupt Driven ADC Read Operation */
+    if (ad4002_continuous_read(ad4002_device_1, &rx_buff) < 0){
+        return -1; 
+    }
 	while (1) {
-        data_valid = ad4002_continuous_read(ad4002_device_1, &rx_buff);
         if(true){
             //printk("Returned data: %d\n", rx_buffer);
             data_valid = false;
         }
-        k_msleep(SLEEP_TIME_MS);
+        // k_msleep(SLEEP_TIME_MS);
 	}
 	return 0;
 }
@@ -66,7 +70,7 @@ static int startDriveSignal(){
     ret = pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags);
         if (ret < 0){
             printk("Error %d: failed to set pulse width\n", ret);
-            return 0;
+            return -1;
         }
     return ret;
 }
