@@ -6,9 +6,9 @@ menuconfig AD4002
     select SPI
     select SPI_STM32
     select SPI_STM32_DMA if $(DT_STM32_SPI_HAS_DMA)
+    select PWM_STM32_CUSTOM_TRIGGER
     help
         Enable STM32 SPI and DMA
-
 
 if AD4002
 

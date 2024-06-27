@@ -12,5 +12,8 @@ compatible: "analog,ad4002"
 include: [spi-device.yaml, base.yaml]
 
 properties:
-  default_property:
-    type: boolean
+  pwms:
+    type: phandle-array
+  
+  sample_period:
+    type: int

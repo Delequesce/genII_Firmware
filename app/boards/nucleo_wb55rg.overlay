@@ -6,16 +6,10 @@
 		ccDrive: ccDrive {
 			pwms = <&pwm16 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
 		};
-
-        cnvDrive: cnvDrive {
-            pwms = <&pwm2 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
-        };
 	};
 
     aliases {
         my-ccdrive = &ccDrive;
-        my-cnvdrive = &cnvDrive;
-        my-qspi = &quadspi;
         ad4002-ch1 = &ad4002_1;
     };
 
@@ -41,10 +35,17 @@
         reg = <0>; // Ignored, but necessary for SPI bindings
 		compatible = "analog,ad4002";
 		status = "okay";
-        spi-max-frequency = <64000000>;
+        spi-max-frequency = <32000000>;
         duplex = <2048>;  // Half Duplex
         spi-cpha;
+        pwms = <&pwm2 1 PWM_NSEC(15) PWM_POLARITY_INVERTED>;
+        sample_period = <62>; // In clock cycles, adjust if clock frequency is not 64 MHz
 	};
+};
+
+&spi1_sck_pa5 {
+    //bias-pull-down;
+    slew-rate = "medium-speed";
 };
 
 &dma1 {
@@ -86,7 +87,7 @@
 &timers2 {
     status = "okay";
     pwm2: pwm {
-        compatible = "st,stm32-pwm";
+        //compatible = "st,stm32-pwm-custom-trigger";
         status = "okay";
         pinctrl-0 = <&tim2_ch1_pa15>;
         pinctrl-names = "default";

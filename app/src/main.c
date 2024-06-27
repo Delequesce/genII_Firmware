@@ -17,24 +17,19 @@
 #include <zephyr/drivers/pwm.h>
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS   1000
-#define CCDRIVER	DT_ALIAS(my_ccdrive)
-#define CNVDRIVER	DT_ALIAS(my_cnvdrive)
+#define SLEEP_TIME_MS       1000
+#define CCDRIVER	        DT_ALIAS(my_ccdrive)
 #define AD4002_INSTANCE_1   DT_ALIAS(ad4002_ch1)
-#define CNV_QSPI_IRQ_ID 28 /* ISR Number*/
-#define CNV_QSPI_IRQ_PRIO 35 /* ISR Priority*/
-#define CNV_QSPI_IRQ_FLAGS  0
-#define RX_BUFFER_LENGTH 2
+#define RX_BUFFER_LENGTH    2
+#define V_SIG_PERIOD        64  /* In clock cycles */
 
-/* The devicetree node identifier for the "led0" alias. */
-#define LED0_NODE DT_ALIAS(led0)
 
-static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER); /*Get a device structure for the pwm device defined in the device tree overlay*/ 
-static const struct pwm_dt_spec cnvDriver = PWM_DT_SPEC_GET(CNVDRIVER);
+/* Obtain Relevant Device Tree Structures */
+static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
 static const struct device* ad4002_device_1 = DEVICE_DT_GET(AD4002_INSTANCE_1);
 
 /* Function Forward Declaration */
-static int generateSignals(void);
+static int startDriveSignal(void);
 
 bool data_valid;
 
@@ -42,6 +37,8 @@ int main(void)
 {
 	int ret;
     data_valid = false;
+
+    /* Set up SPI buffer for AD4002 Reads */
     uint8_t rx_buffer[RX_BUFFER_LENGTH] = {0};
 	struct spi_buf my_spi_buffer[1];
 	my_spi_buffer[0].buf = rx_buffer;
@@ -49,10 +46,10 @@ int main(void)
 	const struct spi_buf_set rx_buff = {my_spi_buffer, 1};
 
     printk("Generating PWM Signals\n");
-    ret = generateSignals();
+    ret = startDriveSignal();
 
 	while (1) {
-        data_valid = ad4002_read(ad4002_device_1, &rx_buff);
+        data_valid = ad4002_continuous_read(ad4002_device_1, &rx_buff);
         if(true){
             //printk("Returned data: %d\n", rx_buffer);
             data_valid = false;
@@ -62,22 +59,14 @@ int main(void)
 	return 0;
 }
 
-static int generateSignals(){
+static int startDriveSignal(){
 
     int ret;
     // ClotChip Drive Signal 
-    ret = pwm_set_cycles(ccDriver.dev, ccDriver.channel, 64, 32, ccDriver.flags);
+    ret = pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags);
         if (ret < 0){
             printk("Error %d: failed to set pulse width\n", ret);
             return 0;
         }
-    
-    // ADC CNV Signal
-    ret = pwm_set_cycles(cnvDriver.dev, cnvDriver.channel,64, 21, cnvDriver.flags);
-        if (ret < 0){
-            printk("Error %d: failed to set pulse width\n", ret);
-            return 0;
-        }
-
     return ret;
 }
