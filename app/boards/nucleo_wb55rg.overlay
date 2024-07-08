@@ -22,7 +22,7 @@
     status = "okay";
 };
 
-#define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_32BITS | STM32_DMA_PERIPH_32BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
+#define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_16BITS | STM32_DMA_PERIPH_16BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
 
 &spi1 {
 	status = "okay";
@@ -38,7 +38,7 @@
         spi-max-frequency = <32000000>;
         duplex = <2048>;  // Half Duplex
         spi-cpha;
-        pwms = <&pwm1 1 PWM_NSEC(15) PWM_POLARITY_INVERTED>;
+        pwms = <&pwm1 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
         sample_period = <62>; // In clock cycles, adjust if clock frequency is not 64 MHz
 	};
 };
@@ -87,6 +87,7 @@
 /* For V_SIG */
 &timers2 {
     status = "okay";
+    st,prescaler = < 0x0000 >;
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-trigger";
         status = "okay";
@@ -98,6 +99,7 @@
 /* For CNV */
 &timers1 {
     status = "okay";
+    st,prescaler = < 0xA >;
     pwm1: pwm {
         status = "okay";
         pinctrl-0 = <&tim1_ch1_pa8>;
