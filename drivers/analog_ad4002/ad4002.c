@@ -82,6 +82,7 @@ struct ad4002_config{
 	uint8_t sample_period; 
 	void (*irq_config_func)(const struct device *dev);
 	void (*manual_irq_func)(const struct device *dev);
+	void (*dma_tcie_irq_func)(const struct device *dev);
 	struct stream dma; 
 	bool master;
 	uint8_t instance;
@@ -113,12 +114,20 @@ static int analog_ad4002_continuous_read(const struct device *dev, int16_t* rx_b
 	DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
 	dma_block = dma_block + dma_stream->channel -1;
 
-	dma_block->CMAR = rx_buffer;
-
 	/* Set Data Size and Enable SPI */
 	SPI_TypeDef* spi_block = cfg->spi_block;
+
+	/* DMA Address and Data Length Config */
+	WRITE_REG(dma_block->CMAR, rx_buffer);
+	WRITE_REG(dma_block->CPAR, &spi_block->DR);
+	WRITE_REG(dma_block->CNDTR, dma_stream->cfg.source_burst_length);
+
+	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
+	SET_BIT(spi_block->CR2, (SPI_CR2_RXDMAEN));
 	SET_BIT(spi_block->CR1, SPI_CR1_SPE);
-	
+	SET_BIT(dma_block->CCR, DMA_CCR_EN);
+
+
 	if (cfg->master){ 
 		
 		/* Setup PWM CNV Signal and heads-up timer */
@@ -152,6 +161,16 @@ static int ad4002_init(const struct device *dev){
 	
 	const struct ad4002_config *cfg = dev->config;
 	//startTime = k_uptime_get();
+
+	/* DMA Clock configuration, might not be necessary since DMA driver should handle */
+	struct stream *dma_stream = &(cfg->dma);
+	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
+			     (clock_control_subsys_t) &dma_stream->pclken) != 0) {
+		return -EIO;
+	}
+
+	// Enable DMA Mux Clock
+	LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMAMUX1);
 	
 	SPI_TypeDef* spi_block = cfg->spi_block;
 
@@ -167,28 +186,30 @@ static int ad4002_init(const struct device *dev){
 		SET_BIT(tim_block->CR1, TIM_CR1_CEN); // Enable Timer 1
 	}
 
-	/* DMA Initialization */
-	struct stream *dma_stream = &(cfg->dma);
-	
+	/* DMA Initialization (LL Drivers) */
+	DMA_TypeDef* dma_base_block = dma_stream->reg;
 	DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
 	dma_block = dma_block + dma_stream->channel -1;
 
+	LL_DMA_SetPeriphRequest(dma_base_block, dma_stream->channel, dma_stream->cfg.dma_slot); // Sets up DMA Mux
+	/*LL_DMA_SetDataTransferDirection(dma_base_block, dma_stream->channel, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
+	LL_DMA_SetChannelPriorityLevel(dma_base_block, dma_stream->channel, dma_stream->cfg.channel_priority);
+	LL_DMA_SetMode(dma_base_block, dma_stream->channel, dma_stream->cfg.cyclic);
+	LL_DMA_SetPeriphIncMode(dma_base_block, dma_stream->channel, dma_stream->src_addr_increment);
+	LL_DMA_SetMemoryIncMode(dma_base_block, dma_stream->channel, dma_stream->dst_addr_increment);
+	LL_DMA_SetPeriphSize(dma_base_block, dma_stream->channel, LL_DMA_PDATAALIGN_HALFWORD);
+	LL_DMA_SetMemorySize(dma_base_block, dma_stream->channel, LL_DMA_MDATAALIGN_HALFWORD);*/
+
 	dma_block->CCR |= ((dma_stream->cfg.cyclic << DMA_CCR_CIRC_Pos) |
-					(dma_stream->cfg.source_data_size << DMA_CCR_PSIZE_Pos) |
-					(dma_stream->cfg.dest_data_size << DMA_CCR_MSIZE_Pos) |
-					(dma_stream->src_addr_increment << DMA_CCR_PINC_Pos) |
-					(dma_stream->dst_addr_increment << DMA_CCR_MINC_Pos) |
-					(dma_stream->cfg.channel_priority << DMA_CCR_PL_Pos));
+				(dma_stream->cfg.source_data_size << DMA_CCR_PSIZE_Pos) |
+				(dma_stream->cfg.dest_data_size << DMA_CCR_MSIZE_Pos) |
+				(dma_stream->src_addr_increment << DMA_CCR_PINC_Pos) |
+				(dma_stream->dst_addr_increment << DMA_CCR_MINC_Pos) |
+				(dma_stream->cfg.channel_priority << DMA_CCR_PL_Pos));
 
-	WRITE_REG(dma_block->CNDTR, dma_stream->cfg.source_burst_length);
-	WRITE_REG(dma_block->CPAR, &spi_block->DR);
-
-
-	/* DMA Clock configuration, might not be necessary since DMA driver should handle */
-	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
-			     (clock_control_subsys_t) &dma_stream->pclken) != 0) {
-		return -EIO;
-	}
+	/*WRITE_REG(dma_block->CNDTR, dma_stream->cfg.source_burst_length);
+	WRITE_REG(dma_block->CPAR, &spi_block->DR);*/
+	
 
 	/* Initialize SPI bus (Low Level) */
 	if (cfg->master){
@@ -197,8 +218,27 @@ static int ad4002_init(const struct device *dev){
 	else{
 		WRITE_REG(spi_block->CR1, (SPI_CR1_CPHA | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
 	}
-	SET_BIT(spi_block->CR2, (SPI_CR2_RXDMAEN)); // SPI DMA Enable
 
+	
+	bool dmaEnable = true; // Set to swap between manual and DMA read (debugging)
+	bool dmaInterrupt = false; // Set to trigger interrupt when dma completes each transfer or error (debugging)
+	if (dmaEnable){
+		if (dmaInterrupt){
+			if (cfg->master){
+				cfg->dma_tcie_irq_func(dev);
+				DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
+				dma_block = dma_block + dma_stream->channel -1;
+				MODIFY_REG(dma_block->CCR, 0, (DMA_CCR_TCIE | DMA_CCR_TEIE));
+			}
+		}
+	}
+	else{
+		if (cfg->master){
+			cfg->manual_irq_func(dev);
+			SET_BIT(spi_block->CR2, SPI_CR2_RXNEIE); // Set for RX interrpt with manual read
+		}
+	}
+	
 	/* Configure and Enable IRQ in NVIC */
 	cfg->irq_config_func(dev);
 
@@ -224,12 +264,48 @@ ISR_DIRECT_DECLARE(pwm_irq_handler_direct)
 	return 1;
 }
 
+ISR_DIRECT_DECLARE(spi_irq_handler_direct)
+{
+	uint32_t* SPI_MASTER_DR = SPI1_BASE + 0xC;
+	printk("Data: %d\n", READ_REG((*SPI_MASTER_DR)));
+	return 1;
+}					
+
+ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
+{
+	//printk("%x\n", READ_REG(DMA1_BASE));
+	printk("Transfer Completed");
+	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;
+	CLEAR_REG(SPI_DMA_1_IFCR);
+	return 1;
+}					
+
+
 static const struct ad4002_driver_api ad4002_api = {
 	.read = analog_ad4002_read,
 	.continuous_read = analog_ad4002_continuous_read,
 	.stop_read = analog_ad4002_stop_read,
 };
 
+#define IRQ_CONFIG_FUNC_MANUAL_READ(index)											\
+static void setUpRXInterrupt_##index(const struct device *dev){						\
+	printk("Manual Read enabled\n");                        						\
+			IRQ_DIRECT_CONNECT(DT_IRQ(SPI_NODE(index), irq),						\
+					DT_IRQ(SPI_NODE(index), priority),  							\
+					spi_irq_handler_direct,				  							\
+					IRQ_ZERO_LATENCY);							           	 		\
+			irq_enable(DT_IRQ(SPI_NODE(index), irq));								\
+}
+
+#define IRQ_CONFIG_FUNC_DMA_TCIE(index)												\
+static void dma_tcie_config_##index(const struct device *dev){						\
+	printk("DMA INTERRUPT ENABLED\n");                        						\
+	IRQ_DIRECT_CONNECT(0xC,															\
+			0,  																	\
+			dma_irq_tcie_direct,				  									\
+			IRQ_ZERO_LATENCY);							           	 				\
+	irq_enable(0xC);																\
+}
 
 #define IRQ_CONFIG_FUNC_MASTER(index)												\
 	static void pwm_irq_config_##index(const struct device *dev)     				\
@@ -256,12 +332,16 @@ static const struct ad4002_driver_api ad4002_api = {
 #define AD4002_DEVICE_INIT(index) 										\
 																		\
 	IRQ_DECLARE(index);													\
+	IRQ_CONFIG_FUNC_MANUAL_READ(index);									\
+	IRQ_CONFIG_FUNC_DMA_TCIE(index);									\
 																		\
 	static const struct ad4002_config ad4002_cfg_##index = { 			\
 		.spi_block = DT_REG_ADDR(SPI_NODE(index)), 						\
 		.cnv_pwm_spec = PWM_RETURN(index),								\
 		.sample_period = DT_INST_PROP_OR(index, sample_period, 0),		\
 		.irq_config_func = pwm_irq_config_##index,						\
+		.manual_irq_func = setUpRXInterrupt_##index,					\
+		.dma_tcie_irq_func = dma_tcie_config_##index,					\
 		SPI_DMA_CHANNEL(SPI_NODE(index))						        \
 		.master = SPI_MASTER(index),									\
 		.instance = index,												\
