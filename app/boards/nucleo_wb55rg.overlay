@@ -121,7 +121,7 @@
 /* For CNV */
 &timers1 {
     status = "okay";
-    st,prescaler = < 0x2 >;
+    st,prescaler = <2>;
     pwm1: pwm {
         status = "okay";
         pinctrl-0 = <&tim1_ch1_pa8>;

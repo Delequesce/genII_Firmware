@@ -32,10 +32,9 @@ int main(void)
 {
 	int ret;
     unsigned int lock_key;
-    int n;
     data_valid = false;
-    int16_t Ve_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
-    int16_t Vr_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
+    static uint16_t Ve_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
+    static uint16_t Vr_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
 
     /* Obtain Relevant Device Tree Structures */
     static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
@@ -45,6 +44,14 @@ int main(void)
     if (startDriveSignal(ccDriver) < 0){
         return -1;
     }
+    uint32_t n;
+    for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
+        *(Ve_data + n) = 1;
+        *(Vr_data + n) = 1;
+    }
+    
+    // For manual reads
+    uint16_t* rx_data;
     
 	while (1) {
         /* Begin Interrupt Driven ADC Read Operation */
@@ -52,9 +59,10 @@ int main(void)
         ad4002_continuous_read(ad4002_device_1, Vr_data, SAMPLES_PER_COLLECTION); // Master start
 
         /* Waits for enough time and then stops the read */
+        
         k_msleep(SLEEP_TIME_MS);
-        lock_key = irq_lock(); // Prevent system interrupts during processing
-        ad4002_stop_read(ad4002_device_1);
+        //lock_key = irq_lock(); // Prevent system interrupts during processing
+        rx_data = ad4002_stop_read(ad4002_device_1);
         /*for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
             if (n % 100 == 0){
                 printk("Ve %d: %d\n", n, *(Ve_data + n));
@@ -63,7 +71,13 @@ int main(void)
         }*/
         k_msleep(1000);
         //irq_unlock(lock_key);
-	}
+
+        for(n = 0; n < SAMPLES_PER_COLLECTION; n+=100){
+            printk("Ve %d: %d\n", n, *(Ve_data + n));
+            printk("Vr %d: %d\n", n, *(Vr_data + n));
+            //printk("Rx %d: %d\n", n, *(rx_data + n));
+        }
+	 }
 	return 0;
 }
 
