@@ -33,7 +33,7 @@
 
 // Comment out to switch between manual and DMA read modes
 #define USE_DMA
-#define USE_DMA_INTERRUPT
+//#define USE_DMA_INTERRUPT
 
 /* DMA Macros */
 #define DMA_CHANNEL_CONFIG(node, dir)	    DT_DMAS_CELL_BY_NAME(node, dir, channel_config)
@@ -109,14 +109,33 @@ struct pwm_stm32_config {
 	const struct pinctrl_dev_config *pcfg;
 };
 
-static int analog_ad4002_continuous_read(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples)
+static int analog_ad4002_continuous_read(const struct device *dev_master, const struct device *dev_slave, uint16_t* rx_buffer_1, uint16_t* rx_buffer_2, const uint32_t N_samples)
 {
 	int ret;
 	count = 0; 
+
+	/* Sets up SPI and DMA for each ADC */
+	spi_dma_setup(dev_master, rx_buffer_1, N_samples);
+	spi_dma_setup(dev_slave, rx_buffer_2, N_samples);
+	
+	/* Setup PWM CNV Signal and heads-up timer */
+	const struct ad4002_config *cfg = dev_master->config;
+	const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
+	const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
+	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
+	
+	/* Enable Timer Interrupts to start read */
+	SET_BIT(pwm_cfg->timer->DIER, TIM_DIER_CC2IE);
+	
+	return 0;
+	
+}
+
+static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples){
 	const struct ad4002_config *cfg = dev->config;
 	struct ad4002_data *dev_data = dev->data;
 	SPI_TypeDef* spi_block = cfg->spi_block;
-	dev_data->N_samples = N_samples;
+	//dev_data->N_samples = N_samples;
 
 	/* Set DMA memory location */
 	#ifdef USE_DMA
@@ -126,7 +145,7 @@ static int analog_ad4002_continuous_read(const struct device *dev, uint16_t* rx_
 	/* DMA Address and Data Length Config */
 	WRITE_REG(dma_block->CMAR, rx_buffer);
 	WRITE_REG(dma_block->CPAR, &spi_block->DR);
-	WRITE_REG(dma_block->CNDTR, dma_stream->cfg.source_burst_length);
+	WRITE_REG(dma_block->CNDTR, N_samples);
 	#endif
 
 	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
@@ -139,19 +158,6 @@ static int analog_ad4002_continuous_read(const struct device *dev, uint16_t* rx_
 	#ifdef USE_DMA
 	SET_BIT(dma_block->CCR, DMA_CCR_EN);
 	#endif
-	if (cfg->master){ 
-		
-		/* Setup PWM CNV Signal and heads-up timer */
-		//printk("Setting PWM CNV Signal\n");
-		const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
-		const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
-		pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
-		
-		/* Enable Timer Interrupts */
-		SET_BIT(pwm_cfg->timer->DIER, TIM_DIER_CC2IE);
-	}
-	return 0;
-	
 }
 
 /* Probably need to add more here to ensure everything is properly reset */
@@ -159,16 +165,9 @@ static int analog_ad4002_stop_read(const struct device *dev){
 	const struct ad4002_config *cfg = dev->config;
 	printk("Stopping Read");
 	count = 0;
-	if(cfg->master){
-		pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, 0, cfg->cnv_pwm_spec.flags);
-	}
+	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, 0, cfg->cnv_pwm_spec.flags);
+
 	return rx_data; 
-}
-
-/* Internal Function to Start to Read Data following CNV interrupt */
-static void analog_ad4002_read(const struct device *dev){
-
-	return;
 }
 
 static int ad4002_init(const struct device *dev){
@@ -200,7 +199,7 @@ static int ad4002_init(const struct device *dev){
 		SET_BIT(tim_block->CR1, TIM_CR1_CEN); // Enable Timer 1
 	}
 
-	/* DMA Initialization (LL Drivers) */
+	/* DMA Initialization */
 	#ifdef USE_DMA
 	DMA_TypeDef* dma_base_block = dma_stream->reg;
 	DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
@@ -276,9 +275,12 @@ ISR_DIRECT_DECLARE(pwm_irq_handler_direct)
 #ifdef USE_DMA_INTERRUPT
 ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
 {
-	//printk("%x\n", READ_REG(DMA1_BASE));
+	/* Clear Flags */
 	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;
 	WRITE_REG((*SPI_DMA_1_IFCR), 0xFFFF);
+
+	/* Copy data to next memory location */
+
 	//printk("Transfer Completed\n");
 	count++;
 	if (count > 1024){
@@ -306,7 +308,6 @@ ISR_DIRECT_DECLARE(spi_irq_handler_direct)
 
 
 static const struct ad4002_driver_api ad4002_api = {
-	.read = analog_ad4002_read,
 	.continuous_read = analog_ad4002_continuous_read,
 	.stop_read = analog_ad4002_stop_read,
 };

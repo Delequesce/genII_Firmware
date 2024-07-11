@@ -38,8 +38,8 @@ int main(void)
 
     /* Obtain Relevant Device Tree Structures */
     static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
-    static const struct device* ad4002_device_1 = DEVICE_DT_GET(AD4002_INSTANCE_1);
-    static const struct device* ad4002_device_2 = DEVICE_DT_GET(AD4002_INSTANCE_2);
+    static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
+    static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
 
     if (startDriveSignal(ccDriver) < 0){
         return -1;
@@ -55,14 +55,14 @@ int main(void)
     
 	while (1) {
         /* Begin Interrupt Driven ADC Read Operation */
-        ad4002_continuous_read(ad4002_device_2, Ve_data, SAMPLES_PER_COLLECTION); // Slave start 
-        ad4002_continuous_read(ad4002_device_1, Vr_data, SAMPLES_PER_COLLECTION); // Master start
+        ad4002_continuous_read(ad4002_master, ad4002_slave, Vr_data, Ve_data, SAMPLES_PER_COLLECTION); // Slave start 
+        //ad4002_continuous_read(ad4002_device_1, Vr_data, SAMPLES_PER_COLLECTION); // Master start
 
         /* Waits for enough time and then stops the read */
         
         k_msleep(SLEEP_TIME_MS);
         //lock_key = irq_lock(); // Prevent system interrupts during processing
-        rx_data = ad4002_stop_read(ad4002_device_1);
+        rx_data = ad4002_stop_read(ad4002_master);
         /*for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
             if (n % 100 == 0){
                 printk("Ve %d: %d\n", n, *(Ve_data + n));
