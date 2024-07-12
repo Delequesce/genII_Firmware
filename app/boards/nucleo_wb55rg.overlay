@@ -27,7 +27,7 @@
 
 &spi1 {
 	status = "okay";
-	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pb4>; // Potentially can omit nss and mosi if not using
+	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6>; // Potentially can omit nss and mosi if not using
 	pinctrl-names = "default";
 	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX
     dma-names = "rx";
