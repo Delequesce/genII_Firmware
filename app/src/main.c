@@ -15,6 +15,8 @@
 #define CCDRIVER	        DT_ALIAS(my_ccdrive)
 #define AD4002_INSTANCE_1   DT_ALIAS(ad4002_ch1)
 #define AD4002_INSTANCE_2   DT_ALIAS(ad4002_ch2)
+#define CC_SHDN_LOW         DT_ALIAS(my_cc_shdn_low)
+#define ADC_SHDN_LOW        DT_ALIAS(my_adc_shdn_low)
 #define V_SIG_PERIOD        64  /* In clock cycles */
 
 #define SAMPLES_PER_COLLECTION  1024
@@ -22,7 +24,7 @@
 
 #define IA_THREAD_PRIO           2    // Adjust as needed
 #define UARTIO_THREAD_PRIORITY   5
-#define IA_STACK_SIZE            1024
+#define IA_STACK_SIZE            2048
 #define UARTIO_STACK_SIZE        1024
 #define N_DATA_BYTES             8 // C (4), G (4) = 8 bytes
 
@@ -68,6 +70,15 @@ static int stopTest();
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 
+
+/* Relevant Device Tree Structures */
+static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
+static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
+static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
+static const struct gpio_dt_spec cc_shdn_low = GPIO_DT_SPEC_GET(CC_SHDN_LOW, gpios);
+static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, gpios);
+
+
 /* Sets up devices */
 int main(){
 
@@ -82,7 +93,15 @@ int main(){
 		return -1;
 	}
 
-	/* Configure and enable UART Interrupt Callback */
+	/* Setup ADC Power and CC Drive Signal */
+    if (!gpio_is_ready_dt(&cc_shdn_low) || !gpio_is_ready_dt(&adc_shdn_low)) {
+        printk("SHDN pins not ready");
+		return 0;
+	}
+    if (gpio_pin_configure_dt(&cc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
+        printk("SHDN pins not properly configured");
+		return 0;
+	}
 
 	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
 }
@@ -181,17 +200,57 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	ARG_UNUSED(unused1);
 	ARG_UNUSED(unused2);
 
-	/* Insert Measurement and Goertzl loop code */
+	/* Data Buffer Initialization */
+	static uint16_t Ve_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
+    static uint16_t Vr_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
+	static uint16_t Ve_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
+    static uint16_t Vr_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
+	for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
+        *(Ve_data + n) = 1;
+        *(Vr_data + n) = 1;
+    } 
+	// For manual reads
+    uint16_t* rx_data;
 
-	// For testing, just write half-word in a loop until buffer is half full
-	uint8_t j;
-	uint8_t i;
-	for(j = 0; j < 1; j++){
-		for (i = 0; i < 255; i++){
-			uart_poll_out(uart_dev, 'K');
+	/* Enable ADC and CC Drive */
+	if (gpio_pin_set_dt(&cc_shdn_low, 1) < 0 || gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
+        printk("SHDN pins not properly set");
+		return 0;
+	}
+	if (startDriveSignal(ccDriver) < 0){
+        return -1;
+    }
+
+	/* Begin Measurement */
+	uint8_t transmit_Byte;
+	uint32_t i, j;
+	for(i = 0; i < 1; i++){
+		/* Read Data from ADC */
+		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+		k_msleep(SLEEP_TIME_MS);
+		rx_data = ad4002_stop_read(ad4002_master);
+
+		/* Process Data (Goertzl + Permittivity Calculations)*/
+		// To Do ...
+
+		// Copy data to safe memory location
+		memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+		memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+
+		/* Send data to UI */ 
+		for (j = 0; j < SAMPLES_PER_COLLECTION; j++){
+			// High Byte
+			transmit_Byte = (Vr_data_safe[j] >> 8) & 0xFF;
+			uart_poll_out(uart_dev, transmit_Byte);
+			//k_busy_wait(1000);
+			// Low Byte
+			transmit_Byte = Vr_data_safe[j] & 0xFF;
+			uart_poll_out(uart_dev, transmit_Byte);
+			//k_busy_wait(1000);
 		}
 		k_msleep(1000);
 	}
+
 	// Send newline to stop UI loop
 	uart_poll_out(uart_dev, '\n');
 
@@ -204,4 +263,17 @@ static int stopTest(){
 	activeState = IDLE;
 	k_thread_abort(ia_tid); 
 	return 0; 
+}
+
+
+static int startDriveSignal(const struct pwm_dt_spec ccDriver){
+
+    int ret;
+    // ClotChip Drive Signal 
+    ret = pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags);
+        if (ret < 0){
+            printk("Error: Failed to set pulse width");
+            return -1;
+        }
+    return ret;
 }

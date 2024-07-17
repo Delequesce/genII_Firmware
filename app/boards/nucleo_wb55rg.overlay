@@ -1,15 +1,31 @@
 / {
+    /* PWM V_sig Drive */
 	pwmdrives: pwmdrives {
 		compatible = "pwm-leds";
 		status = "okay";
 
 		ccDrive: ccDrive {
-			pwms = <&pwm2 1 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
+			pwms = <&pwm2 2 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
 		};
 	};
 
+    /* GPIO SHDN Signals */
+    shdn_gpios: shdn_gpios {
+        compatible = "gpio-leds";
+        cc_shdn_low: cc_shdn_low {
+			gpios = < &gpioa 0x13 0x0 >;
+			label = "Drive low to turn off CC Drive Amplifiers";
+		};
+        adc_shdn_low: adc_shdn_low {
+			gpios = < &gpiob 0x4 0x0 >;
+			label = "Drive low to turn off ADC power and references";
+		};
+    };
+
     aliases {
         my-ccdrive = &ccDrive;
+        my-adc-shdn-low = &adc_shdn_low;
+        my-cc-shdn-low = &cc_shdn_low;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
     };
@@ -77,7 +93,7 @@
 
 &clk_hse {
 	clock-frequency = <DT_FREQ_M(32)>; /* X1 32MHz oscillator with /2 prescalar */
-	//status = "okay"; // Already enabled by nucleo
+	status = "okay";
 };
 
 &clk_lsi1 {
@@ -109,11 +125,11 @@
 /* For V_SIG */
 &timers2 {
     status = "okay";
-    st,prescaler = < 0x0000 >;
+    st,prescaler = < 99 >;
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-trigger";
         status = "okay";
-        pinctrl-0 = <&tim2_ch1_pa0>;
+        pinctrl-0 = <&tim2_ch2_pa1>;
         pinctrl-names = "default";
     };
 };
@@ -121,7 +137,7 @@
 /* For CNV */
 &timers1 {
     status = "okay";
-    st,prescaler = <2>;
+    st,prescaler = <1>;
     pwm1: pwm {
         status = "okay";
         pinctrl-0 = <&tim1_ch1_pa8>;
