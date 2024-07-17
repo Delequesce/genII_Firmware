@@ -72,6 +72,7 @@ K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE);
 int main(){
 
 	/* Check Device Readiness */
+
 	if (!device_is_ready(uart_dev)){
 		return -1;
 	}
@@ -141,7 +142,7 @@ static void uartIOThread_entry_point(){
 									testThread_entry_point, 
 									&test_cfg, NULL, NULL, 
 									IA_THREAD_PRIO, 0, K_NO_WAIT);
-					k_yield(); // Yields to newly created thread because priority is higher than UART Thread
+					k_yield(); // Yields to newly created thread because priority is higher than UART Thread. UART Thread goes to "Ready" State
 					break;
 				case 'H': // Toggle Heater
 					//toggleHeater();
@@ -184,15 +185,18 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	// For testing, just write half-word in a loop until buffer is half full
 	uint8_t j;
-	for(j = 0; j < 10; j++){
-		uint16_t i;
-		for (i = 0; i < 300; i++){
-			uart_poll_out_u16(uart_dev, i);
+	uint8_t i;
+	for(j = 0; j < 1; j++){
+		for (i = 0; i < 255; i++){
+			uart_poll_out(uart_dev, 'K');
 		}
 		k_msleep(1000);
 	}
 	// Send newline to stop UI loop
 	uart_poll_out(uart_dev, '\n');
+
+	// Go back to UART (thread is automatically terminated)
+	activeState = IDLE;
 	return; 
 }
 
