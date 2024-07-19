@@ -1,4 +1,3 @@
 zephyr_library()
 
 zephyr_library_sources_ifdef(CONFIG_AD4002 ad4002.c)
-zephyr_library_sources_ifdef(CONFIG_PWM_STM32_CUSTOM_TRIGGER pwm_stm32_custom_trigger.c)

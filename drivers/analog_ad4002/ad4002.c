@@ -33,6 +33,7 @@
 
 // Comment out to switch between manual and DMA read modes
 #define USE_DMA
+//#define USE_DMA_TX
 //#define USE_DMA_INTERRUPT
 
 /* DMA Macros */
@@ -56,13 +57,18 @@
 		.source_burst_length = 1, \
 		.dest_burst_length = 1, \
 	},								\
-	.src_addr_increment = STM32_DMA_CONFIG_PERIPHERAL_ADDR_INC(DMA_CHANNEL_CONFIG(node, dir)), \
-	.dst_addr_increment = STM32_DMA_CONFIG_MEMORY_ADDR_INC(DMA_CHANNEL_CONFIG(node, dir)),
+	.periph_addr_increment = STM32_DMA_CONFIG_PERIPHERAL_ADDR_INC(DMA_CHANNEL_CONFIG(node, dir)), \
+	.mem_addr_increment = STM32_DMA_CONFIG_MEMORY_ADDR_INC(DMA_CHANNEL_CONFIG(node, dir)),
 
 #define SPI_DMA_CHANNEL(node)							\
-	.dma = {											\
+	.dma_rx = {											\
 		COND_CODE_1(DT_DMAS_HAS_NAME(node, rx),			\
 			(SPI_DMA_CHANNEL_INIT(node, rx)),			\
+			(NULL))										\
+		},												\
+	.dma_tx = {											\
+		COND_CODE_1(DT_DMAS_HAS_NAME(node, tx),			\
+			(SPI_DMA_CHANNEL_INIT(node, tx)),			\
 			(NULL))										\
 		},
 
@@ -72,8 +78,8 @@ struct stream {
 	uint32_t channel;
 	struct dma_config cfg;
 	struct stm32_pclken pclken;
-	bool src_addr_increment;
-	bool dst_addr_increment;
+	bool periph_addr_increment;
+	bool mem_addr_increment;
 };
 
 uint64_t startTime;
@@ -90,9 +96,11 @@ struct ad4002_config{
 	uint8_t sample_period; 
 	void (*irq_config_func)(const struct device *dev);
 	void (*data_irq_func)(const struct device *dev);
-	struct stream dma; 
+	struct stream dma_rx; 
+	struct stream dma_tx;
 	bool master;
 	uint8_t instance;
+	uint16_t tx_buffer;
 };
 
 /* Mutable data, stored in RAM */
@@ -115,8 +123,12 @@ static int analog_ad4002_continuous_read(const struct device *dev_master, const 
 	count = 0; 
 
 	/* Sets up SPI and DMA for each ADC */
-	spi_dma_setup(dev_master, rx_buffer_1, N_samples);
-	spi_dma_setup(dev_slave, rx_buffer_2, N_samples);
+	#ifdef USE_DMA_TX
+	spi_dma_setup(dev_master, rx_buffer_1, N_samples, true);
+	#else
+	spi_dma_setup(dev_master, rx_buffer_1, N_samples, false);
+	#endif
+	spi_dma_setup(dev_slave, rx_buffer_2, N_samples, false);
 	
 	/* Setup PWM CNV Signal and heads-up timer */
 	const struct ad4002_config *cfg = dev_master->config;
@@ -131,32 +143,48 @@ static int analog_ad4002_continuous_read(const struct device *dev_master, const 
 	
 }
 
-static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples){
+static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples, const bool tx_rx){
 	const struct ad4002_config *cfg = dev->config;
 	struct ad4002_data *dev_data = dev->data;
 	SPI_TypeDef* spi_block = cfg->spi_block;
-	//dev_data->N_samples = N_samples;
 
 	/* Set DMA memory location */
 	#ifdef USE_DMA
-	struct stream *dma_stream = &(cfg->dma);
-	DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
-	dma_block = dma_block + dma_stream->channel -1;
+	struct stream *dma_stream_rx = &(cfg->dma_rx);
+	DMA_Channel_TypeDef* dma_block_rx = dma_stream_rx->reg + 1; 
+	dma_block_rx = dma_block_rx + dma_stream_rx->channel -1;
+	DMA_Channel_TypeDef* dma_block_tx;
 	/* DMA Address and Data Length Config */
-	WRITE_REG(dma_block->CMAR, rx_buffer);
-	WRITE_REG(dma_block->CPAR, &spi_block->DR);
-	WRITE_REG(dma_block->CNDTR, N_samples);
+	WRITE_REG(dma_block_rx->CMAR, rx_buffer);
+	WRITE_REG(dma_block_rx->CPAR, &spi_block->DR);
+	WRITE_REG(dma_block_rx->CNDTR, N_samples);
+	if(tx_rx){
+		struct stream *dma_stream_tx = &(cfg->dma_tx);
+		dma_block_tx = dma_stream_tx->reg + 1; 
+		dma_block_tx = dma_block_tx + dma_stream_tx->channel -1;
+		/* DMA Address and Data Length Config */
+		WRITE_REG(dma_block_tx->CMAR, &cfg->tx_buffer);
+		WRITE_REG(dma_block_tx->CPAR, &spi_block->DR);
+		WRITE_REG(dma_block_tx->CNDTR, N_samples);
+	}
+
 	#endif
 
 	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
 	#ifdef USE_DMA
 	SET_BIT(spi_block->CR2, (SPI_CR2_RXDMAEN));
+	if(tx_rx){
+		SET_BIT(spi_block->CR2, (SPI_CR2_TXDMAEN));
+	}
 	#endif
 
 	SET_BIT(spi_block->CR1, SPI_CR1_SPE);
 
 	#ifdef USE_DMA
-	SET_BIT(dma_block->CCR, DMA_CCR_EN);
+	SET_BIT(dma_block_rx->CCR, DMA_CCR_EN);
+	if(tx_rx){
+		SET_BIT(dma_block_tx->CCR, DMA_CCR_EN);
+	}
 	#endif
 }
 
@@ -167,7 +195,7 @@ static int analog_ad4002_stop_read(const struct device *dev){
 	count = 0;
 	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, 0, cfg->cnv_pwm_spec.flags);
 
-	return rx_data; 
+	return 0; 
 }
 
 static int ad4002_init(const struct device *dev){
@@ -175,19 +203,31 @@ static int ad4002_init(const struct device *dev){
 	const struct ad4002_config *cfg = dev->config;
 	//startTime = k_uptime_get();
 
+	#ifdef USE_DMA
 	/* DMA Clock configuration, might not be necessary since DMA driver should handle */
-	struct stream *dma_stream = &(cfg->dma);
+	struct stream *dma_stream_rx = &(cfg->dma_rx);
 	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
-			     (clock_control_subsys_t) &dma_stream->pclken) != 0) {
+			     (clock_control_subsys_t) &dma_stream_rx->pclken) != 0) {
 		return -EIO;
 	}
-
+	#ifdef USE_DMA_TX
+	struct stream *dma_stream_tx;
+	if(cfg->master){
+		dma_stream_tx = &(cfg->dma_tx);
+		if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
+					(clock_control_subsys_t) &dma_stream_tx->pclken) != 0) {
+			return -EIO;
+		}	
+	}
+	#endif
 	// Enable DMA Mux Clock
 	LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMAMUX1);
-	
+	#endif
+
 	SPI_TypeDef* spi_block = cfg->spi_block;
 
-	/* Timer Setup */
+	/* Timer Setup unless DMA TX is used*/
+	#ifndef USE_DMA_TX
 	if (cfg->master){
 		const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
 		const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
@@ -198,14 +238,15 @@ static int ad4002_init(const struct device *dev){
 		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2IE)); // Trigger an interrupt only on channel 2 capture compare
 		SET_BIT(tim_block->CR1, TIM_CR1_CEN); // Enable Timer 1
 	}
+	#endif
 
 	/* DMA Initialization */
 	#ifdef USE_DMA
-	DMA_TypeDef* dma_base_block = dma_stream->reg;
-	DMA_Channel_TypeDef* dma_block = dma_stream->reg + 1; 
-	dma_block = dma_block + dma_stream->channel -1;
+	DMA_TypeDef* dma_base_block_rx = dma_stream_rx->reg;
+	DMA_Channel_TypeDef* dma_block_rx = dma_stream_rx->reg + 1; 
+	dma_block_rx = dma_block_rx + dma_stream_rx->channel -1;
 
-	LL_DMA_SetPeriphRequest(dma_base_block, dma_stream->channel, dma_stream->cfg.dma_slot); // Sets up DMA Mux
+	LL_DMA_SetPeriphRequest(dma_base_block_rx, dma_stream_rx->channel, dma_stream_rx->cfg.dma_slot); // Sets up DMA Mux
 	/*LL_DMA_SetDataTransferDirection(dma_base_block, dma_stream->channel, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
 	LL_DMA_SetChannelPriorityLevel(dma_base_block, dma_stream->channel, dma_stream->cfg.channel_priority);
 	LL_DMA_SetMode(dma_base_block, dma_stream->channel, dma_stream->cfg.cyclic);
@@ -214,16 +255,31 @@ static int ad4002_init(const struct device *dev){
 	LL_DMA_SetPeriphSize(dma_base_block, dma_stream->channel, LL_DMA_PDATAALIGN_HALFWORD);
 	LL_DMA_SetMemorySize(dma_base_block, dma_stream->channel, LL_DMA_MDATAALIGN_HALFWORD);*/
 
-	dma_block->CCR |= ((dma_stream->cfg.cyclic << DMA_CCR_CIRC_Pos) |
-				(dma_stream->cfg.source_data_size << DMA_CCR_PSIZE_Pos) |
-				(dma_stream->cfg.dest_data_size << DMA_CCR_MSIZE_Pos) |
-				(dma_stream->src_addr_increment << DMA_CCR_PINC_Pos) |
-				(dma_stream->dst_addr_increment << DMA_CCR_MINC_Pos) |
-				(dma_stream->cfg.channel_priority << DMA_CCR_PL_Pos));
+	dma_block_rx->CCR |= ((dma_stream_rx->cfg.cyclic << DMA_CCR_CIRC_Pos) |
+				(dma_stream_rx->cfg.source_data_size << DMA_CCR_PSIZE_Pos) |
+				(dma_stream_rx->cfg.dest_data_size << DMA_CCR_MSIZE_Pos) |
+				(dma_stream_rx->periph_addr_increment << DMA_CCR_PINC_Pos) |
+				(dma_stream_rx->mem_addr_increment << DMA_CCR_MINC_Pos) |
+				(dma_stream_rx->cfg.channel_priority << DMA_CCR_PL_Pos));
 
-	/*WRITE_REG(dma_block->CNDTR, dma_stream->cfg.source_burst_length);
-	WRITE_REG(dma_block->CPAR, &spi_block->DR);*/
-	#endif
+	#ifdef USE_DMA_TX
+	if(cfg->master){
+
+		DMA_TypeDef* dma_base_block_tx = dma_stream_tx->reg;
+		DMA_Channel_TypeDef* dma_block_tx = dma_stream_tx->reg + 1; 
+		dma_block_tx = dma_block_tx + dma_stream_tx->channel -1;
+
+		LL_DMA_SetPeriphRequest(dma_base_block_tx, dma_stream_tx->channel, dma_stream_tx->cfg.dma_slot); // Sets up DMA Mux
+
+		dma_block_tx->CCR |= ((dma_stream_tx->cfg.cyclic << DMA_CCR_CIRC_Pos) |
+					(dma_stream_tx->cfg.source_data_size << DMA_CCR_MSIZE_Pos) |
+					(dma_stream_tx->cfg.dest_data_size << DMA_CCR_PSIZE_Pos) |
+					(dma_stream_tx->periph_addr_increment << DMA_CCR_PINC_Pos) |
+					(dma_stream_tx->mem_addr_increment << DMA_CCR_MINC_Pos) |
+					(dma_stream_tx->cfg.channel_priority << DMA_CCR_PL_Pos));
+	}
+	#endif /* USE_DMA_TX */
+	#endif /* USE_DMA */
 
 	/* Initialize SPI bus (Low Level) */
 	if (cfg->master){
@@ -233,7 +289,7 @@ static int ad4002_init(const struct device *dev){
 		WRITE_REG(spi_block->CR1, (SPI_CR1_CPHA | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
 	}
 
-	cfg->data_irq_func(dev);
+	//cfg->data_irq_func(dev);
 	#ifdef USE_DMA
 		#ifdef USE_DMA_INTERRUPT
 		if (cfg->master){
@@ -247,8 +303,11 @@ static int ad4002_init(const struct device *dev){
 			SET_BIT(spi_block->CR2, SPI_CR2_RXNEIE); // Set for RX interrpt with manual read
 		}
 	#endif 	
+
+	#ifndef USE_DMA_TX
 	/* Configure and Enable IRQ in NVIC */
 	cfg->irq_config_func(dev);
+	#endif
 
 	return 0;
 }
@@ -376,6 +435,7 @@ static void setUpRXInterrupt_##index(const struct device *dev){						\
 		SPI_DMA_CHANNEL(SPI_NODE(index))						        \
 		.master = SPI_MASTER(index),									\
 		.instance = index,												\
+		.tx_buffer = 0xFFFF,											\
 	}; 																	\
 																		\
 	static struct ad4002_data ad4002_dev_data_##index = {				\

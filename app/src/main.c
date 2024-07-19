@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/device.h>
@@ -9,26 +10,38 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/drivers/uart.h>
-//#include <zephyr/usb/usb_device.h>
 #include <string.h>
 
-#define CCDRIVER	        DT_ALIAS(my_ccdrive)
-#define AD4002_INSTANCE_1   DT_ALIAS(ad4002_ch1)
-#define AD4002_INSTANCE_2   DT_ALIAS(ad4002_ch2)
-#define CC_SHDN_LOW         DT_ALIAS(my_cc_shdn_low)
-#define ADC_SHDN_LOW        DT_ALIAS(my_adc_shdn_low)
-#define V_SIG_PERIOD        64  /* In clock cycles */
+/* Configuration flags */
+#define USE_GOERTZL				 	0
 
-#define SAMPLES_PER_COLLECTION  1024
-#define SLEEP_TIME_MS 100
+/* DT NODELABELS */
+#define CCDRIVER	        		DT_ALIAS(my_ccdrive)
+#define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
+#define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
+#define CC_SHDN_LOW         		DT_ALIAS(my_cc_shdn_low)
+#define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
 
-#define IA_THREAD_PRIO           2    // Adjust as needed
-#define UARTIO_THREAD_PRIORITY   5
-#define IA_STACK_SIZE            2048
-#define UARTIO_STACK_SIZE        1024
-#define N_DATA_BYTES             8 // C (4), G (4) = 8 bytes
+/* Threading Params */
+#define IA_THREAD_PRIO           	2    // Adjust as needed
+#define UARTIO_THREAD_PRIORITY   	5
+#define IA_STACK_SIZE            	2048
+#define UARTIO_STACK_SIZE        	1024
+#define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
+/* Measurement params */
+#define SAMPLES_PER_COLLECTION  	1024
+#define SLEEP_TIME_MS 				100
+#define DEFAULT_COLLECTION_INTERVAL	1
+#define DEFAULT_RUN_TIME			30
+#define DEFAULT_SPOT_FREQUENCY		1000000
 
+/* Other constants */
+#define PI						 	3.141592654
+#define V_SIG_PERIOD        		64  /* In clock cycles */
+#define N_DATA_BYTES				4 
+
+/* Structs, Unions, and Enums */
 enum testStates {
 	IDLE,
 	TESTRUNNING,
@@ -41,37 +54,33 @@ struct test_config{
 	uint16_t collectionInterval; // Interval in seconds between measurements
 };
 
-
-// Get UART node from Device Tree
-const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console)); 
-
-// Other Global Variables
-enum testStates activeState = IDLE;
-struct k_thread IA_thread_data;
-struct test_config test_cfg = {
-	.runTime = 1800,
-	.collectionInterval = 1,
+union float_to_byte {
+	float float_variable;
+	uint8_t temp_array[N_DATA_BYTES];
 };
 
-/* Threads */
-k_tid_t ia_tid; // IA Measurement Thread
+enum testStates activeState = IDLE;
+static struct test_config test_cfg = {
+	.runTime = DEFAULT_RUN_TIME,
+	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+};
 
 /* Function Forward Declaration */
 static int startDriveSignal(const struct pwm_dt_spec);
 static int configure_uart_device(const struct device *dev);
-static int uart_write(const struct device *dev, void *fmt);
-static int configure_ISR(const struct device *dev);
-static void uart_rx_interrupt_handler(const struct device *dev);
 static void uartIOThread_entry_point();
 static void testThread_entry_point(const struct test_config* test_cfg, void *unused1, void *unused2);
 static int stopTest();
 
 /* Threads */
+k_tid_t ia_tid; // IA Measurement Thread
+struct k_thread IA_thread_data;
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 
 
 /* Relevant Device Tree Structures */
+const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console)); 
 static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
 static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
 static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
@@ -83,7 +92,6 @@ static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, g
 int main(){
 
 	/* Check Device Readiness */
-
 	if (!device_is_ready(uart_dev)){
 		return -1;
 	}
@@ -121,11 +129,6 @@ static int configure_uart_device(const struct device *dev){
 		return -1;
 	}
 	return 0;
-}
-
-/* Writes data to uart */
-static int uart_write(const struct device *dev, void *fmt){
-	return 0; 
 }
 
 /* Polling based UART handler thread */
@@ -209,8 +212,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
         *(Ve_data + n) = 1;
         *(Vr_data + n) = 1;
     } 
-	// For manual reads
-    uint16_t* rx_data;
 
 	/* Enable ADC and CC Drive */
 	if (gpio_pin_set_dt(&cc_shdn_low, 1) < 0 || gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
@@ -222,39 +223,109 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
     }
 
 	/* Begin Measurement */
+	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
+	uint16_t N_Averages = 1;
 	uint8_t transmit_Byte;
-	uint32_t i, j;
-	for(i = 0; i < 1; i++){
-		/* Read Data from ADC */
-		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
-		k_msleep(SLEEP_TIME_MS);
-		rx_data = ad4002_stop_read(ad4002_master);
+	uint16_t i, j, n;
+	const float w0 = 2*PI*DEFAULT_SPOT_FREQUENCY; 
+	const float cos_w0 = cosf(w0);
+	const float sin_w0 = sinf(w0);
+	float mag2Vr, mag2Z, Z_temp_real, Z_temp_imag;
+	float Vr_real, Vr_imag, Ve_real, Ve_imag;
+	float Z_real, Z_imag = 0;
+	float prev_value_Vr, prev_value_Ve;
+	float prev_prev_value_Vr, prev_prev_value_Ve;
+	float current_value_Vr, current_value_Ve;
+	float Zfb_real = 1; // These values will come from calibration
+	float Zfb_imag = 0;
+	union float_to_byte C;
+	C.float_variable = 0;
+	union float_to_byte G;
+	G.float_variable = 0;
 
-		/* Process Data (Goertzl + Permittivity Calculations)*/
-		// To Do ...
+	/* Timing Parameters */
+	uint64_t startTime = k_uptime_get();
+	uint32_t sleepTime;
 
-		// Copy data to safe memory location
-		memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-		memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+	/* This loop runs each collection for the entire test run time (outer loop) */
+	for(i = 0; i < 10; i++){
 
-		/* Send data to UI */ 
-		for (j = 0; j < SAMPLES_PER_COLLECTION; j++){
-			// High Byte
-			transmit_Byte = (Vr_data_safe[j] >> 8) & 0xFF;
-			uart_poll_out(uart_dev, transmit_Byte);
-			//k_busy_wait(1000);
-			// Low Byte
-			transmit_Byte = Vr_data_safe[j] & 0xFF;
-			uart_poll_out(uart_dev, transmit_Byte);
-			//k_busy_wait(1000);
+		/* This loop runs to obtain repeat measurements over the collection frequency interval */
+		for(j = 0; j < N_Averages; j++){
+
+			/* Read Data from ADC */
+			ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+			k_msleep(SLEEP_TIME_MS);
+			ad4002_stop_read(ad4002_master);
+
+			// Copy data to safe memory location
+			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+
+			/* Goertzl Algorithm Params */
+			prev_value_Vr = 0;
+			prev_prev_value_Vr = 0;
+			prev_value_Ve = 0;
+			prev_prev_value_Ve = 0;
+
+			/* Process and/or Send data to UI */ 
+			for (n = 0; n < SAMPLES_PER_COLLECTION; n++){
+				
+				#if USE_GOERTZL
+				/* Goertzl algorithm */
+				current_value_Vr = Vr_data_safe[n] + 2*cos_w0*prev_value_Vr - prev_prev_value_Vr;
+				prev_prev_value_Vr = prev_value_Vr;
+				prev_value_Vr = current_value_Vr; 
+				#else
+				// High Byte
+				transmit_Byte = (Vr_data_safe[n] >> 8) & 0xFF;
+				uart_poll_out(uart_dev, transmit_Byte);
+
+				// Low Byte
+				transmit_Byte = Vr_data_safe[n] & 0xFF;
+				uart_poll_out(uart_dev, transmit_Byte);
+				#endif
+			}
+			#if USE_GOERTZL
+			/* Final Step calculates complex FFT bin for each signal */
+			Vr_real = cos_w0 * current_value_Vr - prev_value_Vr;
+			Vr_imag = sin_w0 * current_value_Vr;
+
+			/* Finally, compute Z, G, and C */
+			// mag2Vr = Vr_real*Vr_real + Vr_imag*Vr_imag;
+			// Z_temp_real = (Ve_real * Vr_real + Ve_imag * Vr_imag)/mag2Vr; 
+			// Z_temp_imag = (Ve_imag * Vr_real - Ve_real * Vr_imag)/mag2Vr;
+			// Z_real = Z_temp_real*Zfb_real - Z_temp_imag * Zfb_imag;
+			// Z_imag = Z_temp_real*Zfb_imag + Z_temp_imag * Z_fb_real;
+			// mag2Z = Z_real*Z_real + Z_imag * Z_imag;
+			// G.float_variable = (G.float_variable*j + (Z_real/mag2Z))/(j+1); // Moving Average
+			// C.float_variable = (C.float_variable*j + (-Z_imag/mag2Z/w0))/(j+1);
+			#else
+			// Send newline to stop UI loop
+			uart_poll_out(uart_dev, '\n');
+			#endif
 		}
-		k_msleep(1000);
+
+		#if USE_GOERTZL
+		/* Send data over uart */
+		/* Transfer data to uart Tx buffer. When the main thread resumes, the handler will be called
+			and write and read operations will commence. Will transfer MSB first */
+		C.float_variable = Vr_real;
+		G.float_variable = Vr_imag;
+		for (n = N_DATA_BYTES; n > 0; n--){
+			uart_poll_out(uart_dev, C.temp_array[n-1]);
+		}
+		for (n = N_DATA_BYTES; n > 0; n--){
+			uart_poll_out(uart_dev, G.temp_array[n-1]);
+		}
+		#endif
+		/* Sleep until next collection period */
+		sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
+		sleepTime =  1000;
+		k_msleep(sleepTime);
 	}
 
-	// Send newline to stop UI loop
-	uart_poll_out(uart_dev, '\n');
-
-	// Go back to UART (thread is automatically terminated)
+	/* Go back to UART (thread is automatically terminated) */
 	activeState = IDLE;
 	return; 
 }

@@ -26,6 +26,6 @@ static inline int ad4002_stop_read(const struct device *dev){
 	return api->stop_read(dev);
 }
 
-static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples);
+static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const uint32_t N_samples, const bool tx_rx);
 
 #endif

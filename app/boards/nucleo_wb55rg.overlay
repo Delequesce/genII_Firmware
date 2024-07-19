@@ -41,12 +41,15 @@
 
 #define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_16BITS | STM32_DMA_PERIPH_16BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
 
+#define STM32_DMA_TX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_16BITS | STM32_DMA_PERIPH_16BITS | STM32_DMA_MEMORY_TO_PERIPH | STM32_DMA_MODE_CYCLIC)
+
 &spi1 {
 	status = "okay";
 	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6>; // Potentially can omit nss and mosi if not using
 	pinctrl-names = "default";
-	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX
-    dma-names = "rx";
+	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>, 
+            <&dma1 3 7 STM32_DMA_TX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX, channel 3 interrupt 7 to tx
+    dma-names = "rx", "tx";
 	
 	ad4002_1: ad4002@0{
         reg = <0>; // Ignored, but necessary for SPI bindings
