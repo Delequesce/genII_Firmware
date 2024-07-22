@@ -20,12 +20,23 @@
 			gpios = < &gpiob 0x4 0x0 >;
 			label = "Drive low to turn off ADC power and references";
 		};
+        d0_tia_select: d0_tia_select {
+            gpios = < &gpioc 0xC 0x0 >;
+			label = "LSB of 2 bit TIA select signal";
+        };
+        d1_tia_select: d1_tia_select {
+            gpios = < &gpioc 0xD 0x0 >;
+			label = "MSB of 2 bit TIA select signal";
+        };
+
     };
 
     aliases {
         my-ccdrive = &ccDrive;
         my-adc-shdn-low = &adc_shdn_low;
         my-cc-shdn-low = &cc_shdn_low;
+        my-d0 = &d0_tia_select;
+        my-d1 = &d1_tia_select;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
     };
@@ -48,7 +59,7 @@
 	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6>; // Potentially can omit nss and mosi if not using
 	pinctrl-names = "default";
 	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>, 
-            <&dma1 3 7 STM32_DMA_TX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX, channel 3 interrupt 7 to tx
+            <&dma1 3 22 STM32_DMA_TX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX, channel 3 interrupt 7 to tx. Request 22 corresponds to our heads up timer. 
     dma-names = "rx", "tx";
 	
 	ad4002_1: ad4002@0{

@@ -14,6 +14,7 @@
 
 /* Configuration flags */
 #define USE_GOERTZL				 	0
+#define FREE_RUN					1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -21,6 +22,8 @@
 #define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
 #define CC_SHDN_LOW         		DT_ALIAS(my_cc_shdn_low)
 #define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
+#define D0							DT_ALIAS(my_d0)
+#define D1							DT_ALIAS(my_d1)
 
 /* Threading Params */
 #define IA_THREAD_PRIO           	2    // Adjust as needed
@@ -86,7 +89,8 @@ static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
 static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
 static const struct gpio_dt_spec cc_shdn_low = GPIO_DT_SPEC_GET(CC_SHDN_LOW, gpios);
 static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, gpios);
-
+static const struct gpio_dt_spec d0 = GPIO_DT_SPEC_GET(D0, gpios);
+static const struct gpio_dt_spec d1 = GPIO_DT_SPEC_GET(D1, gpios);
 
 /* Sets up devices */
 int main(){
@@ -247,6 +251,25 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	uint64_t startTime = k_uptime_get();
 	uint32_t sleepTime;
 
+	/* Configure TIA SHDN */
+    if (!gpio_is_ready_dt(&d0) || !gpio_is_ready_dt(&d1)) {
+        printk("TIA Not Selected");
+		return 0;
+	}
+	/* Channel 0 */
+    if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_INACTIVE) < 0) {
+        printk("TIA Not Selected");
+		return 0;
+	}
+
+	#if FREE_RUN /* Used to observe signals with O-Scope without needing to constantly command new tests */
+	while(1){
+		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+		k_msleep(SLEEP_TIME_MS);
+		ad4002_stop_read(ad4002_master);
+		k_msleep(1000);
+	}
+	#else
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < 10; i++){
 
@@ -324,7 +347,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		sleepTime =  1000;
 		k_msleep(sleepTime);
 	}
-
+	#endif /* Free run mode */
 	/* Go back to UART (thread is automatically terminated) */
 	activeState = IDLE;
 	return; 

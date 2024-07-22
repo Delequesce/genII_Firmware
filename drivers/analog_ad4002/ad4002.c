@@ -33,7 +33,7 @@
 
 // Comment out to switch between manual and DMA read modes
 #define USE_DMA
-//#define USE_DMA_TX
+#define USE_DMA_TX
 //#define USE_DMA_INTERRUPT
 
 /* DMA Macros */
@@ -134,10 +134,12 @@ static int analog_ad4002_continuous_read(const struct device *dev_master, const 
 	const struct ad4002_config *cfg = dev_master->config;
 	const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
 	const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
+
+	/* Enable the CNV signal */
 	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
-	
-	/* Enable Timer Interrupts to start read */
-	SET_BIT(pwm_cfg->timer->DIER, TIM_DIER_CC2IE);
+
+	/* Enable the timer to start reads */
+	SET_BIT(pwm_cfg->timer->CR1, TIM_CR1_CEN); // Enable Timer 1
 	
 	return 0;
 	
@@ -173,9 +175,6 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
 	#ifdef USE_DMA
 	SET_BIT(spi_block->CR2, (SPI_CR2_RXDMAEN));
-	if(tx_rx){
-		SET_BIT(spi_block->CR2, (SPI_CR2_TXDMAEN));
-	}
 	#endif
 
 	SET_BIT(spi_block->CR1, SPI_CR1_SPE);
@@ -192,7 +191,13 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 static int analog_ad4002_stop_read(const struct device *dev){
 	const struct ad4002_config *cfg = dev->config;
 	printk("Stopping Read");
-	count = 0;
+	//count = 0; Not used in DMA modes
+
+	/* Disable the timer to stop reads */
+	const struct pwm_stm32_config *pwm_cfg = cfg->cnv_pwm_spec.dev->config;
+	CLEAR_BIT(pwm_cfg->timer->CR1, TIM_CR1_CEN); // Enable Timer 1
+
+	/* Disable the CNV signal */
 	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, 0, cfg->cnv_pwm_spec.flags);
 
 	return 0; 
@@ -211,14 +216,14 @@ static int ad4002_init(const struct device *dev){
 		return -EIO;
 	}
 	#ifdef USE_DMA_TX
-	struct stream *dma_stream_tx;
-	if(cfg->master){
-		dma_stream_tx = &(cfg->dma_tx);
-		if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
-					(clock_control_subsys_t) &dma_stream_tx->pclken) != 0) {
-			return -EIO;
-		}	
-	}
+	struct stream *dma_stream_tx = &(cfg->dma_tx);
+	// if(cfg->master){
+	// 	dma_stream_tx = &(cfg->dma_tx);
+	// 	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
+	// 				(clock_control_subsys_t) &dma_stream_tx->pclken) != 0) {
+	// 		return -EIO;
+	// 	}	
+	// }
 	#endif
 	// Enable DMA Mux Clock
 	LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMAMUX1);
@@ -226,8 +231,7 @@ static int ad4002_init(const struct device *dev){
 
 	SPI_TypeDef* spi_block = cfg->spi_block;
 
-	/* Timer Setup unless DMA TX is used*/
-	#ifndef USE_DMA_TX
+	/* Timer Setup. IF DMA is used, replace interrupt configure with DMA configure */
 	if (cfg->master){
 		const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
 		const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
@@ -235,10 +239,12 @@ static int ad4002_init(const struct device *dev){
 		CLEAR_BIT(tim_block->CR1, TIM_CR1_CEN); // Disable Timer 1
 		WRITE_REG(tim_block->CCR2, 64-CNV_HEADSUP_TIME); // Set Duty cycle for heads-up timer
 		SET_BIT(tim_block->CCER, TIM_CCER_CC2E); // Enable Cpature Compare Channel 2
-		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2IE)); // Trigger an interrupt only on channel 2 capture compare
-		SET_BIT(tim_block->CR1, TIM_CR1_CEN); // Enable Timer 1
+		#ifdef USE_DMA_TX
+		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2DE)); // Trigger a DMA request on channel 2 capture compare
+		#else
+		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2IE)); // Trigger an interrupt on channel 2 capture compare
+		#endif
 	}
-	#endif
 
 	/* DMA Initialization */
 	#ifdef USE_DMA
@@ -330,6 +336,24 @@ ISR_DIRECT_DECLARE(pwm_irq_handler_direct)
 
 	return 1;
 }
+
+// ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
+// {
+// 	/* Clear Flags */
+// 	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;
+// 	WRITE_REG((*SPI_DMA_1_IFCR), 0xFFFF);
+
+// 	/* Copy data to next memory location */
+
+// 	//printk("Transfer Completed\n");
+// 	count++;
+// 	if (count > 1024){
+// 		uint32_t* TIM1_CR = TIM1_BASE;
+// 		CLEAR_BIT((*TIM1_CR), TIM_CR1_CEN); // Enable Timer 1
+// 	}
+// 	return 1;
+// }
+
 
 #ifdef USE_DMA_INTERRUPT
 ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
