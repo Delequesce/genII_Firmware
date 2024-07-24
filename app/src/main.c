@@ -14,7 +14,7 @@
 
 /* Configuration flags */
 #define USE_GOERTZL				 	0
-#define FREE_RUN					1
+#define FREE_RUN					0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -138,14 +138,24 @@ static int configure_uart_device(const struct device *dev){
 /* Polling based UART handler thread */
 static void uartIOThread_entry_point(){
 
+	#if FREE_RUN 
+	activeState = TESTRUNNING;  
+	/* Allocate memory and spawn new thread */
+	ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+					K_THREAD_STACK_SIZEOF(IA_stack_area),
+					testThread_entry_point, 
+					&test_cfg, NULL, NULL, 
+					IA_THREAD_PRIO, 0, K_NO_WAIT);
+	k_yield(); // Yields to newly created thread because priority is higher than UART Thread. UART Thread goes to "Ready" State
+	#else
 	unsigned char p_char;
 	int ret;
 	while(1){
-		// Polls uart interface once per second for any incoming data
+		// Polls uart interface 10 times per second for any incoming data
 		while (uart_poll_in(uart_dev, &p_char) < 0){
 			/* Allow other threads to work */
 			//printk("Waiting for input...\n");
-			k_msleep(1000);
+			k_msleep(100);
 		}
 
 		/* Decides which subroutine to execute based on sent command. Spawns and cancels appropriate threads */
@@ -183,8 +193,6 @@ static void uartIOThread_entry_point(){
 					activeState = EQC;
 					//runEQC();
 					break;
-				default:
-					printk("Unknown Command\n");
 			}
 			else{
 				case 'X': // Stop Test
@@ -198,6 +206,7 @@ static void uartIOThread_entry_point(){
 			}
 		}
 	}
+	#endif
 	return;
 }
 
@@ -231,6 +240,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	uint16_t N_Averages = 1;
 	uint8_t transmit_Byte;
 	uint16_t i, j, n;
+	uint16_t buff_fill;
 	const float w0 = 2*PI*DEFAULT_SPOT_FREQUENCY; 
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
@@ -247,6 +257,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	union float_to_byte G;
 	G.float_variable = 0;
 
+	unsigned char a_char;
+
 	/* Timing Parameters */
 	uint64_t startTime = k_uptime_get();
 	uint32_t sleepTime;
@@ -257,7 +269,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		return 0;
 	}
 	/* Channel 0 */
-    if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_INACTIVE) < 0) {
+    if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("TIA Not Selected");
 		return 0;
 	}
@@ -271,7 +283,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 	#else
 	/* This loop runs each collection for the entire test run time (outer loop) */
-	for(i = 0; i < 10; i++){
+	for(i = 0; i < 5; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
 		for(j = 0; j < N_Averages; j++){
@@ -281,7 +293,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			k_msleep(SLEEP_TIME_MS);
 			ad4002_stop_read(ad4002_master);
 
-			// Copy data to safe memory location
+			/* Copy data to safe memory location */ 
 			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
 
@@ -292,6 +304,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			prev_prev_value_Ve = 0;
 
 			/* Process and/or Send data to UI */ 
+			buff_fill = 0;
 			for (n = 0; n < SAMPLES_PER_COLLECTION; n++){
 				
 				#if USE_GOERTZL
@@ -301,14 +314,32 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				prev_value_Vr = current_value_Vr; 
 				#else
 				// High Byte
-				transmit_Byte = (Vr_data_safe[n] >> 8) & 0xFF;
+				transmit_Byte = (Ve_data_safe[n] >> 8) & 0xFF;
 				uart_poll_out(uart_dev, transmit_Byte);
 
 				// Low Byte
-				transmit_Byte = Vr_data_safe[n] & 0xFF;
+				transmit_Byte = Ve_data_safe[n] & 0xFF;
 				uart_poll_out(uart_dev, transmit_Byte);
+
+				/* Buffer is full, wait for all clear signal from UI */
+				if(n == 1 || n == 500 || n == 1000){
+					transmit_Byte = 'e';
+					uart_poll_out(uart_dev, transmit_Byte);
+					transmit_Byte = 'o';
+					uart_poll_out(uart_dev, transmit_Byte);
+					transmit_Byte = 'r';
+					uart_poll_out(uart_dev, transmit_Byte);
+					while(1){
+						while(uart_poll_in(uart_dev, &a_char) < 0){
+						}
+						if(a_char == 'K'){
+							break;
+						}
+					}
+				}
 				#endif
 			}
+
 			#if USE_GOERTZL
 			/* Final Step calculates complex FFT bin for each signal */
 			Vr_real = cos_w0 * current_value_Vr - prev_value_Vr;
@@ -325,7 +356,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			// C.float_variable = (C.float_variable*j + (-Z_imag/mag2Z/w0))/(j+1);
 			#else
 			// Send newline to stop UI loop
-			uart_poll_out(uart_dev, '\n');
+			//uart_poll_out(uart_dev, '\n');
 			#endif
 		}
 
@@ -349,6 +380,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 	#endif /* Free run mode */
 	/* Go back to UART (thread is automatically terminated) */
+	uart_poll_out(uart_dev, '\n'); // Ends collection on UI side
 	activeState = IDLE;
 	return; 
 }

@@ -90,14 +90,20 @@
 	};
 };
 
+
 &spi1_sck_pa5 {
     //bias-pull-down;
-    slew-rate = "medium-speed";
+    slew-rate = "high-speed";
 };
 
 &spi2_sck_pb10 {
     //bias-pull-down;
-    slew-rate = "medium-speed";
+    slew-rate = "high-speed";
+};
+
+&tim2_ch2_pa1 {
+    //bias-pull-down;
+    slew-rate = "low-speed";
 };
 
 &dma1 {
@@ -139,7 +145,7 @@
 /* For V_SIG */
 &timers2 {
     status = "okay";
-    st,prescaler = < 99 >;
+    st,prescaler = < 0 >;
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-trigger";
         status = "okay";
@@ -151,7 +157,7 @@
 /* For CNV */
 &timers1 {
     status = "okay";
-    st,prescaler = <1>;
+    st,prescaler = <0>;
     pwm1: pwm {
         status = "okay";
         pinctrl-0 = <&tim1_ch1_pa8>;

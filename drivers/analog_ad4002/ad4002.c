@@ -27,8 +27,8 @@
 /* SPI and PWM Params*/
 #define SPI_OPER(index) 	(SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(SPI_FRAME_BITS))
 #define SPI_FRAME_BITS 		16
-#define CNV_HIGH_TIME 		10 // 21 Clock cycles is about 330 nsec at 64 MHz
-#define CNV_HEADSUP_TIME	6 // 10 Clock cycles is about 160 nsec at 64 MHz
+#define CNV_HIGH_TIME 		21 // 21 Clock cycles is about 330 nsec at 64 MHz
+#define CNV_HEADSUP_TIME	16 // 10 Clock cycles is about 160 nsec at 64 MHz
 #define RX_BUFFER_LENGTH    2
 
 // Comment out to switch between manual and DMA read modes
@@ -191,7 +191,7 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 /* Probably need to add more here to ensure everything is properly reset */
 static int analog_ad4002_stop_read(const struct device *dev){
 	const struct ad4002_config *cfg = dev->config;
-	printk("Stopping Read");
+	//printk("Stopping Read");
 	//count = 0; Not used in DMA modes
 
 	/* Disable the timer to stop reads */
@@ -292,10 +292,10 @@ static int ad4002_init(const struct device *dev){
 
 	/* Initialize SPI bus (Low Level) */
 	if (cfg->master){
-		WRITE_REG(spi_block->CR1, (SPI_CR1_CPHA | SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Master Config
+		WRITE_REG(spi_block->CR1, (SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Master Config
 	}
 	else{
-		WRITE_REG(spi_block->CR1, (SPI_CR1_CPHA | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
+		WRITE_REG(spi_block->CR1, (SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
 	}
 
 	//cfg->data_irq_func(dev);
