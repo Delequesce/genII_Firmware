@@ -245,7 +245,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
-	float mag2Vr, mag2Z, Z_temp_real, Z_temp_imag;
+	float mag2Vr, mag2Ve, mag2Z, Z_temp_real, Z_temp_imag;
 	float Vr_real, Vr_imag, Ve_real, Ve_imag;
 	float Z_real, Z_imag = 0;
 	float prev_value_Vr, prev_value_Ve;
@@ -255,7 +255,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float Zfb_imag = 0;
 	union float_to_byte C;
 	C.float_variable = 0;
-	union float_to_byte G;
+	volatile union float_to_byte G;
 	G.float_variable = 0;
 
 	unsigned char a_char;
@@ -275,6 +275,18 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		return 0;
 	}
 
+	#if FREE_RUN
+	while(1){
+		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+		k_msleep(SLEEP_TIME_MS);
+		ad4002_stop_read(ad4002_master);
+
+		/* Copy data to safe memory location */ 
+		memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+		memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+		k_msleep(100);
+	}
+	#else
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < 10; i++){
 
@@ -301,14 +313,22 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				current_value_Ve = 3*Ve_data_safe[n]/65535.0 + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
 				prev_prev_value_Ve = prev_value_Ve;
 				prev_value_Ve = current_value_Ve; 
+
+				current_value_Vr = 3*Vr_data_safe[n]/65535.0 + 2 * cos_w0 * prev_value_Vr - prev_prev_value_Vr;
+				prev_prev_value_Vr = prev_value_Vr;
+				prev_value_Vr = current_value_Vr; 
 			}
 
 			/* Final Step calculates complex FFT bin for each signal */
 			Ve_real = (cos_w0 * prev_value_Ve - prev_prev_value_Ve)/SAMPLES_PER_COLLECTION;
 			Ve_imag = (sin_w0 * prev_value_Ve)/SAMPLES_PER_COLLECTION;
 
+			Vr_real = (cos_w0 * prev_value_Vr - prev_prev_value_Vr)/SAMPLES_PER_COLLECTION;
+			Vr_imag = (sin_w0 * prev_value_Vr)/SAMPLES_PER_COLLECTION;
+
 			/* Finally, compute Z, G, and C */
-			mag2Vr = Ve_real*Ve_real + Ve_imag*Ve_imag;
+			mag2Ve = Ve_real*Ve_real + Ve_imag*Ve_imag;
+			mag2Vr = Vr_real*Vr_real + Vr_imag*Vr_imag;
 			// Z_temp_real = (Ve_real * Vr_real + Ve_imag * Vr_imag)/mag2Vr; 
 			// Z_temp_imag = (Ve_imag * Vr_real - Ve_real * Vr_imag)/mag2Vr;
 			// Z_real = Z_temp_real*Zfb_real - Z_temp_imag * Zfb_imag;
@@ -318,10 +338,15 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			// C.float_variable = (C.float_variable*j + (-Z_imag/mag2Z/w0))/(j+1);
 
 			// Send newline to stop UI loop
-			C.float_variable = mag2Vr;
+			C.float_variable = mag2Ve;
+			G.float_variable = mag2Vr;
 
 			for(n = N_DATA_BYTES; n > 0; n--){
 				transmit_Byte = C.temp_array[n-1];
+				uart_poll_out(uart_dev, transmit_Byte);
+			}
+			for(n = N_DATA_BYTES; n > 0; n--){
+				transmit_Byte = G.temp_array[n-1];
 				uart_poll_out(uart_dev, transmit_Byte);
 			}
 
@@ -352,6 +377,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			uart_poll_out(uart_dev, transmit_Byte); // Ends collection on UI side
 		}
 	}
+	#endif
 	activeState = IDLE;
 	return; 
 }

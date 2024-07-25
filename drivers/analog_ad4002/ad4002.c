@@ -294,7 +294,8 @@ static int ad4002_init(const struct device *dev){
 		SET_BIT(spi_block->CR2, SPI_CR2_DS_3); // 16b 
 	}
 	else{
-		WRITE_REG(spi_block->CR1, (SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
+		WRITE_REG(spi_block->CR1, (SPI_CR1_SSM)); // Basic Slave Config
+		SET_BIT(spi_block->CR2, SPI_CR2_DS_3); // 16b 
 	}
 
 	//cfg->data_irq_func(dev);
