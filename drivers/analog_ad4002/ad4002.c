@@ -25,8 +25,6 @@
 #define SPI_NODE(index) DT_BUS(AD4002_NODE(index))
 
 /* SPI and PWM Params*/
-#define SPI_OPER(index) 	(SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(SPI_FRAME_BITS))
-#define SPI_FRAME_BITS 		16
 #define CNV_HIGH_TIME 		21 // 21 Clock cycles is about 330 nsec at 64 MHz
 #define CNV_HEADSUP_TIME	16 // 10 Clock cycles is about 160 nsec at 64 MHz
 #define RX_BUFFER_LENGTH    2
@@ -293,6 +291,7 @@ static int ad4002_init(const struct device *dev){
 	/* Initialize SPI bus (Low Level) */
 	if (cfg->master){
 		WRITE_REG(spi_block->CR1, (SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Master Config
+		SET_BIT(spi_block->CR2, SPI_CR2_DS_3); // 16b 
 	}
 	else{
 		WRITE_REG(spi_block->CR1, (SPI_CR1_SSM | SPI_CR1_SSI)); // Basic Slave Config	
