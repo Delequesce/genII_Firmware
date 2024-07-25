@@ -13,7 +13,6 @@
 #include <string.h>
 
 /* Configuration flags */
-#define USE_GOERTZL				 	0
 #define FREE_RUN					0
 
 /* DT NODELABELS */
@@ -38,6 +37,8 @@
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_RUN_TIME			30
 #define DEFAULT_SPOT_FREQUENCY		1000000
+#define CONVERT_FREQUENCY			1032258
+#define W0							0.19634916
 
 /* Other constants */
 #define PI						 	3.141592654
@@ -241,7 +242,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	uint8_t transmit_Byte;
 	uint16_t i, j, n;
 	uint16_t buff_fill;
-	const float w0 = 2*PI*DEFAULT_SPOT_FREQUENCY; 
+	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
 	float mag2Vr, mag2Z, Z_temp_real, Z_temp_imag;
@@ -274,16 +275,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		return 0;
 	}
 
-	#if FREE_RUN /* Used to observe signals with O-Scope without needing to constantly command new tests */
-	while(1){
-		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
-		k_msleep(SLEEP_TIME_MS);
-		ad4002_stop_read(ad4002_master);
-		k_msleep(1000);
-	}
-	#else
 	/* This loop runs each collection for the entire test run time (outer loop) */
-	for(i = 0; i < 5; i++){
+	for(i = 0; i < 10; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
 		for(j = 0; j < N_Averages; j++){
@@ -302,51 +295,20 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			prev_prev_value_Vr = 0;
 			prev_value_Ve = 0;
 			prev_prev_value_Ve = 0;
-
-			/* Process and/or Send data to UI */ 
-			buff_fill = 0;
-			for (n = 0; n < SAMPLES_PER_COLLECTION; n++){
-				
-				#if USE_GOERTZL
-				/* Goertzl algorithm */
-				current_value_Vr = Vr_data_safe[n] + 2*cos_w0*prev_value_Vr - prev_prev_value_Vr;
-				prev_prev_value_Vr = prev_value_Vr;
-				prev_value_Vr = current_value_Vr; 
-				#else
-				// High Byte
-				transmit_Byte = (Ve_data_safe[n] >> 8) & 0xFF;
-				uart_poll_out(uart_dev, transmit_Byte);
-
-				// Low Byte
-				transmit_Byte = Ve_data_safe[n] & 0xFF;
-				uart_poll_out(uart_dev, transmit_Byte);
-
-				/* Buffer is full, wait for all clear signal from UI */
-				if(n == 1 || n == 500 || n == 1000){
-					transmit_Byte = 'e';
-					uart_poll_out(uart_dev, transmit_Byte);
-					transmit_Byte = 'o';
-					uart_poll_out(uart_dev, transmit_Byte);
-					transmit_Byte = 'r';
-					uart_poll_out(uart_dev, transmit_Byte);
-					while(1){
-						while(uart_poll_in(uart_dev, &a_char) < 0){
-						}
-						if(a_char == 'K'){
-							break;
-						}
-					}
-				}
-				#endif
+			
+			/* Run algorithm */
+			for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
+				current_value_Ve = 3*Ve_data_safe[n]/65535.0 + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
+				prev_prev_value_Ve = prev_value_Ve;
+				prev_value_Ve = current_value_Ve; 
 			}
 
-			#if USE_GOERTZL
 			/* Final Step calculates complex FFT bin for each signal */
-			Vr_real = cos_w0 * current_value_Vr - prev_value_Vr;
-			Vr_imag = sin_w0 * current_value_Vr;
+			Ve_real = (cos_w0 * prev_value_Ve - prev_prev_value_Ve)/SAMPLES_PER_COLLECTION;
+			Ve_imag = (sin_w0 * prev_value_Ve)/SAMPLES_PER_COLLECTION;
 
 			/* Finally, compute Z, G, and C */
-			// mag2Vr = Vr_real*Vr_real + Vr_imag*Vr_imag;
+			mag2Vr = Ve_real*Ve_real + Ve_imag*Ve_imag;
 			// Z_temp_real = (Ve_real * Vr_real + Ve_imag * Vr_imag)/mag2Vr; 
 			// Z_temp_imag = (Ve_imag * Vr_real - Ve_real * Vr_imag)/mag2Vr;
 			// Z_real = Z_temp_real*Zfb_real - Z_temp_imag * Zfb_imag;
@@ -354,33 +316,42 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			// mag2Z = Z_real*Z_real + Z_imag * Z_imag;
 			// G.float_variable = (G.float_variable*j + (Z_real/mag2Z))/(j+1); // Moving Average
 			// C.float_variable = (C.float_variable*j + (-Z_imag/mag2Z/w0))/(j+1);
-			#else
+
 			// Send newline to stop UI loop
+			C.float_variable = mag2Vr;
+
+			for(n = N_DATA_BYTES; n > 0; n--){
+				transmit_Byte = C.temp_array[n-1];
+				uart_poll_out(uart_dev, transmit_Byte);
+			}
+
 			//uart_poll_out(uart_dev, '\n');
-			#endif
 		}
 
-		#if USE_GOERTZL
 		/* Send data over uart */
 		/* Transfer data to uart Tx buffer. When the main thread resumes, the handler will be called
 			and write and read operations will commence. Will transfer MSB first */
-		C.float_variable = Vr_real;
-		G.float_variable = Vr_imag;
-		for (n = N_DATA_BYTES; n > 0; n--){
-			uart_poll_out(uart_dev, C.temp_array[n-1]);
-		}
-		for (n = N_DATA_BYTES; n > 0; n--){
-			uart_poll_out(uart_dev, G.temp_array[n-1]);
-		}
-		#endif
+		// C.float_variable = Vr_real;
+		// G.float_variable = Vr_imag;
+		// for (n = N_DATA_BYTES; n > 0; n--){
+		// 	uart_poll_out(uart_dev, C.temp_array[n-1]);
+		// }
+		// for (n = N_DATA_BYTES; n > 0; n--){
+		// 	uart_poll_out(uart_dev, G.temp_array[n-1]);
+		// }
+
 		/* Sleep until next collection period */
 		sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
 		sleepTime =  1000;
 		k_msleep(sleepTime);
 	}
-	#endif /* Free run mode */
 	/* Go back to UART (thread is automatically terminated) */
-	uart_poll_out(uart_dev, '\n'); // Ends collection on UI side
+	for(i = 0; i<3; i++){
+		for(n = 0; n < 4; n++){
+			transmit_Byte = n;
+			uart_poll_out(uart_dev, transmit_Byte); // Ends collection on UI side
+		}
+	}
 	activeState = IDLE;
 	return; 
 }
