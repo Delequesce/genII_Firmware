@@ -43,12 +43,45 @@
 
 };
 
+/ {
+	zephyr,user {
+		/* adjust channel number according to pinmux in board.dts */
+		io-channels = <&adc1 3>;
+        //io-channel-names = "Vth1";
+	};
+};
+
+&adc1{
+    #address-cells = <1>;
+	#size-cells = <0>;
+    //st,adc-clock-source = <ASYNC>;
+    //st,adc-prescaler = <256>;
+    //vref-mv = <2500>;
+    //pinctrl-0 = < &adc1_in4_pc3 &adc1_in3_pc2 >;
+	//pinctrl-names = "default";
+    //status = "okay";
+
+    channel@3{
+        reg = <3>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+    };
+
+};
+
 &usart1{
     stop-bits = "1";
     parity = "none";
     data-bits = <8>;
     status = "okay";
 };
+
+&flash{
+    status = "okay";
+};
+
 
 #define STM32_DMA_RX_FLAGS (STM32_DMA_PRIORITY_VERY_HIGH | STM32_DMA_MEM_16BITS | STM32_DMA_PERIPH_16BITS | STM32_DMA_MEM_INC | STM32_DMA_PERIPH_TO_MEMORY | STM32_DMA_MODE_CYCLIC)
 

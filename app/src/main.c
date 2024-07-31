@@ -3,6 +3,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/device.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/sys/printk.h>
@@ -10,81 +11,38 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/flash.h>
+#include <zephyr/drivers/adc.h>
 #include <string.h>
+#include <app/main.h>
 
-/* Configuration flags */
-#define FREE_RUN					0
-
-/* DT NODELABELS */
-#define CCDRIVER	        		DT_ALIAS(my_ccdrive)
-#define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
-#define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
-#define CC_SHDN_LOW         		DT_ALIAS(my_cc_shdn_low)
-#define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
-#define D0							DT_ALIAS(my_d0)
-#define D1							DT_ALIAS(my_d1)
-
-/* Threading Params */
-#define IA_THREAD_PRIO           	2    // Adjust as needed
-#define UARTIO_THREAD_PRIORITY   	5
-#define IA_STACK_SIZE            	2048
-#define UARTIO_STACK_SIZE        	1024
-#define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
-
-/* Measurement params */
-#define SAMPLES_PER_COLLECTION  	1024
-#define SLEEP_TIME_MS 				100
-#define DEFAULT_COLLECTION_INTERVAL	1
-#define DEFAULT_RUN_TIME			30
-#define DEFAULT_SPOT_FREQUENCY		1000000
-#define CONVERT_FREQUENCY			1032258
-#define W0							0.19634916
-
-/* Other constants */
-#define PI						 	3.141592654
-#define V_SIG_PERIOD        		64  /* In clock cycles */
-#define N_DATA_BYTES				4 
-
-/* Structs, Unions, and Enums */
-enum testStates {
-	IDLE,
-	TESTRUNNING,
-	CALIBRATING,
-	EQC
-};
-
-struct test_config{
-	uint16_t runTime; // Test run time in seconds
-	uint16_t collectionInterval; // Interval in seconds between measurements
-};
-
-union float_to_byte {
-	float float_variable;
-	uint8_t temp_array[N_DATA_BYTES];
-};
-
+/* Default States */
 enum testStates activeState = IDLE;
+enum heaterStates heaterState = NOT_HEATING; 
+
 static struct test_config test_cfg = {
 	.runTime = DEFAULT_RUN_TIME,
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 };
 
-/* Function Forward Declaration */
-static int startDriveSignal(const struct pwm_dt_spec);
-static int configure_uart_device(const struct device *dev);
-static void uartIOThread_entry_point();
-static void testThread_entry_point(const struct test_config* test_cfg, void *unused1, void *unused2);
-static int stopTest();
+/* Load with default values */
+static struct calibration_data calib = {
+	.Zfb_real = DEFAULT_ZFB_REAL,
+	.Zfb_imag = DEFAULT_ZFB_IMAG,
+};
 
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
+k_tid_t heater_tid; // Calibration Measurement Thread
 struct k_thread IA_thread_data;
+struct k_thread heater_thread_data;
+K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 
-
 /* Relevant Device Tree Structures */
-const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console)); 
+const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+static const struct device *flash_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
 static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
 static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
 static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
@@ -92,6 +50,17 @@ static const struct gpio_dt_spec cc_shdn_low = GPIO_DT_SPEC_GET(CC_SHDN_LOW, gpi
 static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, gpios);
 static const struct gpio_dt_spec d0 = GPIO_DT_SPEC_GET(D0, gpios);
 static const struct gpio_dt_spec d1 = GPIO_DT_SPEC_GET(D1, gpios);
+
+#if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) || \
+	!DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+#error "No suitable devicetree overlay specified"
+#endif
+
+static const struct adc_dt_spec adc_channels[] = {
+	DT_FOREACH_PROP_ELEM(DT_PATH(zephyr_user), io_channels,
+			     DT_SPEC_AND_COMMA)
+};
+
 
 /* Sets up devices */
 int main(){
@@ -115,6 +84,8 @@ int main(){
         printk("SHDN pins not properly configured");
 		return 0;
 	}
+
+	k_yield();
 
 	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
 }
@@ -146,7 +117,7 @@ static void uartIOThread_entry_point(){
 					K_THREAD_STACK_SIZEOF(IA_stack_area),
 					testThread_entry_point, 
 					&test_cfg, NULL, NULL, 
-					IA_THREAD_PRIO, 0, K_NO_WAIT);
+					IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 	k_yield(); // Yields to newly created thread because priority is higher than UART Thread. UART Thread goes to "Ready" State
 	#else
 	unsigned char p_char;
@@ -158,7 +129,6 @@ static void uartIOThread_entry_point(){
 			//printk("Waiting for input...\n");
 			k_msleep(100);
 		}
-
 		/* Decides which subroutine to execute based on sent command. Spawns and cancels appropriate threads */
 		switch(p_char) {
 			if (activeState == IDLE){
@@ -166,29 +136,36 @@ static void uartIOThread_entry_point(){
 					uart_poll_out(uart_dev, 'K');
 					break;
 				case 'S': // Read and alter Test Configuration Structure
-					uint16_t* p_u16;
-					uart_poll_in_u16(uart_dev, p_u16);
-					test_cfg.runTime = (*p_u16 & 0x00FF);
-					test_cfg.collectionInterval = (*p_u16 & 0xFF00);
+					volatile uint8_t* p_u8;
+					uart_poll_in(uart_dev, p_u8);
+					test_cfg.runTime = *p_u8;
+					uart_poll_in(uart_dev, p_u8);
+					test_cfg.collectionInterval = *p_u8;
 					break;
 				case 'N': // New Test
-					activeState = TESTRUNNING;  
+					activeState = TESTRUNNING;
 					/* Allocate memory and spawn new thread */
 					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 									K_THREAD_STACK_SIZEOF(IA_stack_area),
 									testThread_entry_point, 
 									&test_cfg, NULL, NULL, 
-									IA_THREAD_PRIO, 0, K_NO_WAIT);
-					k_yield(); // Yields to newly created thread because priority is higher than UART Thread. UART Thread goes to "Ready" State
+									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 					break;
 				case 'H': // Toggle Heater
-					//toggleHeater();
+					/* Toggle global parameter for heater thread to observe */
+					heaterState = (heaterState + 1) % 2; 
 					break;
 				case 'B': // Calibrate System
 					activeState = CALIBRATING;
-					uart_poll_out(uart_dev, 'K');
-					//runCalibration();
-					activeState = IDLE;
+					struct test_config calib_cfg = {
+						.runTime = DEFAULT_CALIBRATION_TIME,
+						.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+					};
+					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+									K_THREAD_STACK_SIZEOF(IA_stack_area),
+									testThread_entry_point, 
+									&calib_cfg, NULL, NULL, 
+									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 					break;
 				case 'Q': // Run EQC
 					activeState = EQC;
@@ -201,13 +178,75 @@ static void uartIOThread_entry_point(){
 						break;
 					}
 					activeState = IDLE; 
-					// Cancel currently running test thread
-					// ...
+					k_thread_abort(ia_tid);
 					break;
 			}
 		}
+		/* Yield to newly spawned thread or to heater thread */
+		k_yield();
 	}
 	#endif
+	return;
+}
+
+static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3){
+
+	/* Casts unused params to void to avoid compiler warnings */
+	ARG_UNUSED(unused1);
+	ARG_UNUSED(unused2);
+	ARG_UNUSED(unused3);
+
+	/* Configure */
+	uint32_t count = 0;
+
+	/* Buffer where samples will be written */
+	uint16_t buf;
+	struct adc_sequence sequence = {
+		.buffer = &buf,
+		/* buffer size in bytes, not number of samples */
+		.buffer_size = sizeof(buf),
+		.calibrate = false,
+	};
+	
+	/* Configure channels and sequence individually prior to sampling. */
+	for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+		if (!adc_is_ready_dt(&adc_channels[i])) {
+			printk("ADC controller device %s not ready\n", adc_channels[i].dev->name);
+			return 0;
+		}
+
+		if (adc_channel_setup_dt(&adc_channels[i]) < 0) {
+			printk("Could not setup channel #%d\n", i);
+			return 0;
+		}
+		if (adc_sequence_init_dt(&adc_channels[i], &sequence) < 0) {
+				//LOG_ERR("Could not initalize sequnce");
+				return 0;
+			}
+	}
+	int32_t val_mv;
+	while(1){
+
+		/* Read current temperature values from ADC */
+		for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+			adc_read_dt(&adc_channels[i], &sequence);
+			val_mv = (int32_t)buf;
+			adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
+			//uart_write()
+			printk("Channel %d reading: %d", i, val_mv);
+		}
+
+		// To Do...
+
+		if(heaterState == HEATING){
+			/* Run PID loop and set outputs */
+			// To Do...
+
+		}
+
+		/* Schedule new reading every second and let other threads run */
+		k_msleep(1000);
+	}
 	return;
 }
 
@@ -216,6 +255,14 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	ARG_UNUSED(unused1);
 	ARG_UNUSED(unused2);
+
+	/** Get Current Calibration Data from Flash and read into calibration structure 
+	 * If normal test is running, load the most recent calibration. 
+	 * If test is for calibration, use default values for easy calibration. 
+	*/
+	if (activeState == TESTRUNNING){
+		flash_read(flash_device, PAGE255, &calib, 8);
+	}
 
 	/* Data Buffer Initialization */
 	static uint16_t Ve_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
@@ -239,21 +286,18 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Begin Measurement */
 	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
 	uint16_t N_Averages = 1;
-	uint8_t transmit_Byte;
 	uint16_t i, j, n;
-	uint16_t buff_fill;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
 	float mag2Vr, mag2Ve, mag2Z, Z_temp_real, Z_temp_imag;
 	float Vr_real, Vr_imag, Ve_real, Ve_imag;
 	float Z_real, Z_imag = 0;
+	float Z_real_mean, Z_imag_mean = 0;
 	float prev_value_Vr, prev_value_Ve;
 	float prev_prev_value_Vr, prev_prev_value_Ve;
 	float current_value_Vr, current_value_Ve;
-	float Zfb_real = 1; // These values will come from calibration
-	float Zfb_imag = 0;
-	union float_to_byte C;
+	volatile union float_to_byte C;
 	C.float_variable = 0;
 	volatile union float_to_byte G;
 	G.float_variable = 0;
@@ -327,59 +371,77 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			Vr_imag = (sin_w0 * prev_value_Vr)/SAMPLES_PER_COLLECTION;
 
 			/* Finally, compute Z, G, and C */
-			mag2Ve = Ve_real*Ve_real + Ve_imag*Ve_imag;
-			mag2Vr = Vr_real*Vr_real + Vr_imag*Vr_imag;
-			// Z_temp_real = (Ve_real * Vr_real + Ve_imag * Vr_imag)/mag2Vr; 
-			// Z_temp_imag = (Ve_imag * Vr_real - Ve_real * Vr_imag)/mag2Vr;
-			// Z_real = Z_temp_real*Zfb_real - Z_temp_imag * Zfb_imag;
-			// Z_imag = Z_temp_real*Zfb_imag + Z_temp_imag * Z_fb_real;
-			// mag2Z = Z_real*Z_real + Z_imag * Z_imag;
-			// G.float_variable = (G.float_variable*j + (Z_real/mag2Z))/(j+1); // Moving Average
-			// C.float_variable = (C.float_variable*j + (-Z_imag/mag2Z/w0))/(j+1);
-
-			// Send newline to stop UI loop
-			C.float_variable = mag2Ve;
-			G.float_variable = mag2Vr;
-
-			for(n = N_DATA_BYTES; n > 0; n--){
-				transmit_Byte = C.temp_array[n-1];
-				uart_poll_out(uart_dev, transmit_Byte);
-			}
-			for(n = N_DATA_BYTES; n > 0; n--){
-				transmit_Byte = G.temp_array[n-1];
-				uart_poll_out(uart_dev, transmit_Byte);
-			}
-
-			//uart_poll_out(uart_dev, '\n');
+			Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
+			Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
+			Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1); // Moving Average
+			Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1);
+			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
+			G.float_variable = Z_real/mag2Z;
+			C.float_variable = -Z_imag/mag2Z/w0;
 		}
 
 		/* Send data over uart */
-		/* Transfer data to uart Tx buffer. When the main thread resumes, the handler will be called
-			and write and read operations will commence. Will transfer MSB first */
-		// C.float_variable = Vr_real;
-		// G.float_variable = Vr_imag;
-		// for (n = N_DATA_BYTES; n > 0; n--){
-		// 	uart_poll_out(uart_dev, C.temp_array[n-1]);
-		// }
-		// for (n = N_DATA_BYTES; n > 0; n--){
-		// 	uart_poll_out(uart_dev, G.temp_array[n-1]);
-		// }
+		uart_write(C.temp_array, N_DATA_BYTES, UART_MSB_FIRST);
+		uart_write(G.temp_array, N_DATA_BYTES, UART_MSB_FIRST);
+
+		/* Update calibration moving average */
+		if (activeState == CALIBRATING){
+			Z_real_mean = (Z_real_mean * i + Z_real)/(i+1);
+			Z_imag_mean = (Z_imag_mean * i + Z_imag)/(i+1);
+		}
 
 		/* Sleep until next collection period */
 		sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
 		sleepTime =  1000;
 		k_msleep(sleepTime);
 	}
-	/* Go back to UART (thread is automatically terminated) */
+
+	/* Signal UI to stop collection. Stop code is 0x0123 repeated thrice */
+	uint8_t stopCode[4] = {0, 1, 2, 3}; 
 	for(i = 0; i<3; i++){
-		for(n = 0; n < 4; n++){
-			transmit_Byte = n;
-			uart_poll_out(uart_dev, transmit_Byte); // Ends collection on UI side
-		}
+		uart_write(stopCode, 4, UART_LSB_FIRST);
+	}
+
+	/* Perform additional calibration steps, if necessary */
+	if(activeState == CALIBRATING){
+		const float test_Z_real = 180.0;
+		const float test_Z_imag = 0.0;
+
+		calib.Zfb_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
+		calib.Zfb_imag = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
+
+		/* Send new values over uart*/
+		uart_write((uint8_t *)&calib.Zfb_real, 4, UART_LSB_FIRST);
+		uart_write((uint8_t *)&calib.Zfb_imag, 4, UART_LSB_FIRST);
+
+		/* Write to flash memory */
+		//flash_write_protection_set(flash_device, false);
+		flash_write(flash_device, PAGE255, &calib, 8);
+		//flash_write_protection_set(flash_device, true);
 	}
 	#endif
 	activeState = IDLE;
 	return; 
+}
+
+
+static void uart_write(uint8_t* data, uint8_t size, bool dir){
+	
+	if (dir){
+		uint8_t transmit_Byte = *data;
+		for(int i = 0; i < size; i++){
+			uart_poll_out(uart_dev, transmit_Byte);
+			transmit_Byte = *(data + i);
+		}
+	}
+	else{
+		uint8_t transmit_Byte = *(data + size);
+		for(int i = size; i > 0; i--){
+			transmit_Byte = *(data + i -1);
+			uart_poll_out(uart_dev, transmit_Byte);
+		}
+	}
+	return;
 }
 
 static int stopTest(){
@@ -387,7 +449,6 @@ static int stopTest(){
 	k_thread_abort(ia_tid); 
 	return 0; 
 }
-
 
 static int startDriveSignal(const struct pwm_dt_spec ccDriver){
 
