@@ -62,6 +62,9 @@ static const struct adc_dt_spec adc_channels[] = {
 };
 
 
+//static const struct adc_dt_spec adc_channels[] = {ADC_DT_SPEC_GET_BY_NAME(DT_PATH(zephyr_user), vth2)};
+
+
 /* Sets up devices */
 int main(){
 
@@ -219,21 +222,21 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			printk("Could not setup channel #%d\n", i);
 			return 0;
 		}
-		if (adc_sequence_init_dt(&adc_channels[i], &sequence) < 0) {
-				//LOG_ERR("Could not initalize sequnce");
-				return 0;
-			}
 	}
 	int32_t val_mv;
 	while(1){
 
 		/* Read current temperature values from ADC */
 		for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+			if (adc_sequence_init_dt(&adc_channels[i], &sequence) < 0) {
+				//LOG_ERR("Could not initalize sequnce");
+				return 0;
+			}
 			adc_read_dt(&adc_channels[i], &sequence);
 			val_mv = (int32_t)buf;
 			adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
 			//uart_write()
-			printk("Channel %d reading: %d", i, val_mv);
+			printk("Channel %d reading: %d\n", i, val_mv);
 		}
 
 		// To Do...
