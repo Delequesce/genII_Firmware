@@ -7,3 +7,4 @@
 
 add_subdirectory_ifdef(CONFIG_CAD_STM32_QSPI cad_qspi)
 add_subdirectory_ifdef(CONFIG_AD4002 analog_ad4002)
+add_subdirectory_ifdef(CONFIG_FAST_PWM cad_pwm)

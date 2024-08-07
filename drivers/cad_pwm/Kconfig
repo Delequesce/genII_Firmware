@@ -1,0 +1,17 @@
+
+menuconfig FAST_PWM
+    bool "Fast PWM Device Driver"
+    depends on DT_HAS_ST_STM32_PWM_ENABLED
+	select USE_STM32_LL_TIM
+	select USE_STM32_LL_RCC if SOC_SERIES_STM32F4X || SOC_SERIES_STM32F7X || SOC_SERIES_STM32H7X
+	select RESET
+    help
+        This option enables a faster version of the PWM driver for STM32 family of processors. 
+
+if FAST_PWM
+
+module = FAST_PWM
+module-str = FAST_PWM
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

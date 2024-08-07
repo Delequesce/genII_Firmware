@@ -1,5 +1,5 @@
 / {
-    /* PWM V_sig Drive */
+    /* PWM V_sig Drive and heater */
 	pwmdrives: pwmdrives {
 		compatible = "pwm-leds";
 		status = "okay";
@@ -7,6 +7,10 @@
 		ccDrive: ccDrive {
 			pwms = <&pwm2 2 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
 		};
+
+        heaterPwm: heaterPwm { 
+            pwms = <&pwm2 4 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
+        };
 	};
 
     /* GPIO SHDN Signals */
@@ -28,15 +32,21 @@
             gpios = < &gpioc 0xD 0x0 >;
 			label = "MSB of 2 bit TIA select signal";
         };
+        heater_en: heater_en {
+            gpios = <&gpioc 0xE 0x0>;
+            label = "High enable for heater power";
+        };
 
     };
 
     aliases {
         my-ccdrive = &ccDrive;
+        my-heaterpwm = &heaterPwm;
         my-adc-shdn-low = &adc_shdn_low;
         my-cc-shdn-low = &cc_shdn_low;
         my-d0 = &d0_tia_select;
         my-d1 = &d1_tia_select;
+        my-heater-en = &heater_en;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
     };
@@ -160,6 +170,10 @@
 	status = "disabled"; // Enabled by nucleo
 };
 
+&clk_lse {
+    status = "disabled";
+};
+
 // This sets the PLL source to be HSE and sets the output frequency to be 64 MHz (max). Not configured by nucleo
 &pll {
 	div-m = <2>;
@@ -182,14 +196,14 @@
     //ahb4-prescaler = <1>;
 };
 
-/* For V_SIG */
+/* For V_SIG and Heater_PWM */
 &timers2 {
     status = "okay";
     st,prescaler = < 0 >;
     pwm2: pwm {
-        //compatible = "st,stm32-pwm-custom-trigger";
+        compatible = "st,stm32-pwm-custom-fast";
         status = "okay";
-        pinctrl-0 = <&tim2_ch2_pa1>;
+        pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pa3>;
         pinctrl-names = "default";
     };
 };

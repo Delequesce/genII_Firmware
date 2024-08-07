@@ -6,12 +6,14 @@
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
+#define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
 #define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
 #define CC_SHDN_LOW         		DT_ALIAS(my_cc_shdn_low)
 #define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
 #define D0							DT_ALIAS(my_d0)
 #define D1							DT_ALIAS(my_d1)
+#define HEATER_EN					DT_ALIAS(my_heater_en)
 
 /* Threading Params */
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
@@ -41,6 +43,10 @@
 #define PAGE255						0x0FF000
 #define UART_LSB_FIRST				0
 #define UART_MSB_FIRST				1
+#define NUM_THERMISTORS				4
+#define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
+#define K_P							8
+#define K_I							0.1
 
 /* Helper Macros */
 #define COMPLEX_DIVIDE_REAL(r1, i1, r2, i2) (r1*r2 + i1*i2)/(r2*r2 + i2*i2)
@@ -70,23 +76,27 @@ struct test_config{
 };
 
 struct calibration_data{
-	uint32_t Zfb_real;
-	uint32_t Zfb_imag;
+	float Zfb_real;
+	float Zfb_imag;
 };
 
-union float_to_byte {
-	float float_variable;
-	uint8_t temp_array[N_DATA_BYTES];
+struct impedance_data{
+	float C;
+	float G;
 };
+
+/* Other global Variables */
+static float heater_errI;
+static bool deviceConnected = false;
 
 /* Function Forward Declaration */
-static int startDriveSignal(const struct pwm_dt_spec);
 static int configure_uart_device(const struct device *dev);
 static void uartIOThread_entry_point();
 static void testThread_entry_point(const struct test_config* test_cfg, void *unused1, void *unused2);
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3);
 static int stopTest();
-static void uart_write(uint8_t* data, uint8_t size, bool dir);
+static void uart_write_32f(float* data, uint8_t numData, char messageCode);
+static float adc_mv_to_temperature(int32_t val_mv);
 
 
 #endif

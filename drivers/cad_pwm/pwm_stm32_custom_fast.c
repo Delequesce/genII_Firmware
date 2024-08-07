@@ -1,23 +1,22 @@
-#define DT_DRV_COMPAT st_stm32_pwm_custom_trigger
+#define DT_DRV_COMPAT st_stm32_pwm_custom_fast
 
 #include <errno.h>
 
 #include <soc.h>
 #include <stm32_ll_rcc.h>
 #include <stm32_ll_tim.h>
-#include <app/drivers/pwm_stm32_custom_trigger.h>
+#include <app/drivers/pwm_stm32_custom_fast.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/reset.h>
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
-
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
 #include <zephyr/dt-bindings/pwm/stm32_pwm.h>
 
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(pwm_stm32_custom_trigger, CONFIG_PWM_LOG_LEVEL);
+LOG_MODULE_REGISTER(pwm_stm32_custom_fast, CONFIG_PWM_LOG_LEVEL);
 
 /* L0 series MCUs only have 16-bit timers and don't have below macro defined */
 #ifndef IS_TIM_32B_COUNTER_INSTANCE
@@ -186,112 +185,63 @@ static int get_tim_clk(const struct stm32_pclken *pclken, uint32_t *tim_clk)
 	return 0;
 }
 
-static int pwm_stm32_set_cycles(const struct device *dev, uint32_t channel,
-				uint32_t period_cycles, uint32_t pulse_cycles,
-				pwm_flags_t flags)
-{
-	const struct pwm_stm32_config *cfg = dev->config;
 
+
+static int pwm_stm32_configure(const struct device *dev, uint32_t channel, pwm_flags_t flags){
+	
 	uint32_t ll_channel;
-	uint32_t current_ll_channel; /* complementary output if used */
-	uint32_t negative_ll_channel;
+	const struct pwm_stm32_config *cfg = dev->config;
+	LL_TIM_OC_InitTypeDef oc_init;
 
-	if (channel < 1u || channel > TIMER_MAX_CH) {
-		LOG_ERR("Invalid channel (%d)", channel);
-		return -EINVAL;
-	}
-
-	/*
-	 * Non 32-bit timers count from 0 up to the value in the ARR register
-	 * (16-bit). Thus period_cycles cannot be greater than UINT16_MAX + 1.
-	 */
-	if (!IS_TIM_32B_COUNTER_INSTANCE(cfg->timer) &&
-	    (period_cycles > UINT16_MAX + 1)) {
-		return -ENOTSUP;
-	}
+	LL_TIM_OC_StructInit(&oc_init);
 
 	ll_channel = ch2ll[channel - 1u];
-	negative_ll_channel = 0;
 
-	/* in LL_TIM_CC_DisableChannel and LL_TIM_CC_IsEnabledChannel,
-	 * the channel param could be the complementary one
-	 */
-	if ((flags & STM32_PWM_COMPLEMENTARY_MASK) == STM32_PWM_COMPLEMENTARY) {
-		if (!negative_ll_channel) {
-			/* setting a flag on a channel that has not this capability */
-			LOG_ERR("Channel %d has NO complementary output", channel);
-			return -EINVAL;
-		}
-		current_ll_channel = negative_ll_channel;
-	} else {
-		current_ll_channel = ll_channel;
+	oc_init.OCMode = LL_TIM_OCMODE_PWM1;
+	oc_init.OCState = LL_TIM_OCSTATE_ENABLE;
+	oc_init.OCPolarity = get_polarity(flags);
+
+	if (LL_TIM_OC_Init(cfg->timer, ll_channel, &oc_init) != SUCCESS) {
+		LOG_ERR("Could not initialize timer channel output");
+		return -EIO;
 	}
-
-	if (period_cycles == 0u) {
-		LL_TIM_CC_DisableChannel(cfg->timer, current_ll_channel);
-		return 0;
-	}
-
-	if (cfg->countermode == LL_TIM_COUNTERMODE_UP) {
-		/* remove 1 period cycle, accounts for 1 extra low cycle */
-		period_cycles -= 1U;
-	} else if (cfg->countermode == LL_TIM_COUNTERMODE_DOWN) {
-		/* remove 1 pulse cycle, accounts for 1 extra high cycle */
-		pulse_cycles -= 1U;
-		/* remove 1 period cycle, accounts for 1 extra low cycle */
-		period_cycles -= 1U;
-	} else if (is_center_aligned(cfg->countermode)) {
-		pulse_cycles /= 2U;
-		period_cycles /= 2U;
-	} else {
-		return -ENOTSUP;
-	}
-
-	if (!LL_TIM_CC_IsEnabledChannel(cfg->timer, current_ll_channel)) {
-		LL_TIM_OC_InitTypeDef oc_init;
-
-		LL_TIM_OC_StructInit(&oc_init);
-
-		oc_init.OCMode = LL_TIM_OCMODE_PWM1;
-		oc_init.OCState = LL_TIM_OCSTATE_ENABLE;
-		oc_init.OCPolarity = get_polarity(flags);
-		oc_init.CompareValue = pulse_cycles;
-
-		/* in LL_TIM_OC_Init, the channel is always the non-complementary */
-		if (LL_TIM_OC_Init(cfg->timer, ll_channel, &oc_init) != SUCCESS) {
-			LOG_ERR("Could not initialize timer channel output");
-			return -EIO;
-		}
-
-		LL_TIM_EnableARRPreload(cfg->timer);
-		/* in LL_TIM_OC_EnablePreload, the channel is always the non-complementary */
-		LL_TIM_OC_EnablePreload(cfg->timer, ll_channel);
-		LL_TIM_SetAutoReload(cfg->timer, period_cycles);
-		LL_TIM_GenerateEvent_UPDATE(cfg->timer);
-	} else {
-		/* in LL_TIM_OC_SetPolarity, the channel could be the complementary one */
-		LL_TIM_OC_SetPolarity(cfg->timer, current_ll_channel, get_polarity(flags));
-		set_timer_compare[channel - 1u](cfg->timer, pulse_cycles);
-		LL_TIM_SetAutoReload(cfg->timer, period_cycles);
-	}
-
+	
+	LL_TIM_EnableARRPreload(cfg->timer);
+	LL_TIM_OC_EnablePreload(cfg->timer, ll_channel);
+	
 	return 0;
 }
 
-static int pwm_stm32_get_cycles_per_sec(const struct device *dev,
-					uint32_t channel, uint64_t *cycles)
-{
-	struct pwm_stm32_data *data = dev->data;
+static int pwm_stm32_set_period(const struct device *dev, uint32_t period_cycles){
 	const struct pwm_stm32_config *cfg = dev->config;
+	LL_TIM_SetAutoReload(cfg->timer, period_cycles);
+	//LL_TIM_GenerateEvent_UPDATE(cfg->timer); // May need to generate an update event for starting counter
+	return 0;
+}
+static int pwm_stm32_set_duty_cycle(const struct device *dev, uint32_t channel, uint32_t pulse_cycles){
+	const struct pwm_stm32_config *cfg = dev->config;
+	set_timer_compare[channel - 1u](cfg->timer, pulse_cycles);
+	return 0;
+}
 
-	*cycles = (uint64_t)(data->tim_clk / (cfg->prescaler + 1));
-
+static int pwm_stm32_toggle_channel(const struct device *dev, uint32_t channel, bool en){
+	const struct pwm_stm32_config *cfg = dev->config;
+	uint32_t ll_channel = ch2ll[channel - 1u];
+	if(en){
+		
+		LL_TIM_CC_EnableChannel(cfg->timer, ll_channel);
+		//LL_TIM_GenerateEvent_UPDATE(cfg->timer);
+		return 0;
+	}
+	LL_TIM_CC_DisableChannel(cfg->timer, ll_channel);
 	return 0;
 }
 
 static const struct custom_pwm_driver_api custom_pwm_stm32_driver_api = {
-	.set_cycles = pwm_stm32_set_cycles,
-	.get_cycles_per_sec = pwm_stm32_get_cycles_per_sec,
+	.pwm_configure = pwm_stm32_configure,
+	.set_period = pwm_stm32_set_period,
+	.set_duty_cycle = pwm_stm32_set_duty_cycle,
+	.toggle_channel = pwm_stm32_toggle_channel,
 };
 
 static int pwm_stm32_init(const struct device *dev)
@@ -345,13 +295,6 @@ static int pwm_stm32_init(const struct device *dev)
 		LOG_ERR("Could not initialize timer");
 		return -EIO;
 	}
-
-#if !defined(CONFIG_SOC_SERIES_STM32L0X) && !defined(CONFIG_SOC_SERIES_STM32L1X)
-	/* enable outputs and counter */
-	if (IS_TIM_BREAK_INSTANCE(cfg->timer)) {
-		LL_TIM_EnableAllOutputs(cfg->timer);
-	}
-#endif
 
 	LL_TIM_EnableCounter(cfg->timer);
 

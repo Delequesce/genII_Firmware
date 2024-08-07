@@ -10,11 +10,11 @@
  * @brief Custom PWM Driver APIs
  */
 
-#ifndef ZEPHYR_INCLUDE_DRIVERS_PWM_CUSTOM_TRIGGER_H_
-#define ZEPHYR_INCLUDE_DRIVERS_PWM_CUSTOM_TRIGGER_H_
+#ifndef ZEPHYR_INCLUDE_DRIVERS_PWM_CUSTOM_FAST_H_
+#define ZEPHYR_INCLUDE_DRIVERS_PWM_CUSTOM_FAST_H_
 
 /**
- * @brief PWM Interface with counter compare triggering
+ * @brief PWM Interface with fast updates
  * @defgroup pwm_interface PWM Interface
  * @since 1.0
  * @version 1.0.0
@@ -32,6 +32,8 @@
 #include <zephyr/toolchain.h>
 
 #include <zephyr/dt-bindings/pwm/pwm.h>
+
+#ifndef ZEPHYR_INCLUDE_DRIVERS_PWM_H_
 
 /**
  * @name PWM capture configuration flags
@@ -365,233 +367,60 @@ struct pwm_dt_spec {
 #define PWM_DT_SPEC_INST_GET_OR(inst, default_value)			       \
 	PWM_DT_SPEC_GET_OR(DT_DRV_INST(inst), default_value)
 
-/**
- * @brief PWM capture callback handler function signature
- *
- * @note The callback handler will be called in interrupt context.
- *
- * @note @kconfig{CONFIG_PWM_CAPTURE} must be selected to enable PWM capture
- * support.
- *
- * @param[in] dev PWM device instance.
- * @param channel PWM channel.
-
- * @param period_cycles Captured PWM period width (in clock cycles). HW
- *                      specific.
- * @param pulse_cycles Captured PWM pulse width (in clock cycles). HW specific.
- * @param status Status for the PWM capture (0 if no error, negative errno
- *               otherwise. See pwm_capture_cycles() return value
- *               descriptions for details).
- * @param user_data User data passed to pwm_configure_capture()
- */
-typedef void (*pwm_capture_callback_handler_t)(const struct device *dev,
-					       uint32_t channel,
-					       uint32_t period_cycles,
-					       uint32_t pulse_cycles,
-					       int status, void *user_data);
+#endif /*if pwm is not included*/
 
 /** @cond INTERNAL_HIDDEN */
 /**
  * @brief PWM driver API call to configure PWM pin period and pulse width.
  * @see pwm_set_cycles() for argument description.
  */
-typedef int (*pwm_set_cycles_t)(const struct device *dev, uint32_t channel,
-				uint32_t period_cycles, uint32_t pulse_cycles,
-				pwm_flags_t flags);
-
-/**
- * @brief PWM driver API call to obtain the PWM cycles per second (frequency).
- * @see pwm_get_cycles_per_sec() for argument description
- */
-typedef int (*pwm_get_cycles_per_sec_t)(const struct device *dev,
-					uint32_t channel, uint64_t *cycles);
-
+typedef int (*pwm_configure_t)(const struct device *dev, uint32_t channel, pwm_flags_t flags);
+typedef int (*pwm_set_period_t)(const struct device *dev, uint32_t period_cycles);
+typedef int (*pwm_set_duty_cycle_t)(const struct device *dev, uint32_t channel, uint32_t pulse_cycles);
+typedef int (*pwm_toggle_channel_t)(const struct device *dev, uint32_t channel, bool en);	
 
 /** @brief PWM driver API definition. */
 __subsystem struct custom_pwm_driver_api {
-	pwm_set_cycles_t set_cycles;
-	pwm_get_cycles_per_sec_t get_cycles_per_sec;
+	pwm_configure_t pwm_configure;
+	pwm_set_period_t set_period;
+	pwm_set_duty_cycle_t set_duty_cycle;
+	pwm_toggle_channel_t toggle_channel;
 };
 /** @endcond */
 
 /**
  * @brief Set the period and pulse width for a single PWM output.
- *
- * The PWM period and pulse width will synchronously be set to the new values
- * without glitches in the PWM signal, but the call will not block for the
- * change to take effect.
- *
- * @note Not all PWM controllers support synchronous, glitch-free updates of the
- * PWM period and pulse width. Depending on the hardware, changing the PWM
- * period and/or pulse width may cause a glitch in the generated PWM signal.
- *
- * @note Some multi-channel PWM controllers share the PWM period across all
- * channels. Depending on the hardware, changing the PWM period for one channel
- * may affect the PWM period for the other channels of the same PWM controller.
- *
- * Passing 0 as @p pulse will cause the pin to be driven to a constant
- * inactive level.
- * Passing a non-zero @p pulse equal to @p period will cause the pin
- * to be driven to a constant active level.
- *
+ * 
  * @param[in] dev PWM device instance.
  * @param channel PWM channel.
- * @param period Period (in clock cycles) set to the PWM. HW specific.
- * @param pulse Pulse width (in clock cycles) set to the PWM. HW specific.
  * @param flags Flags for pin configuration.
  *
  * @retval 0 If successful.
- * @retval -EINVAL If pulse > period.
  * @retval -errno Negative errno code on failure.
  */
-__syscall int custom_pwm_set_cycles(const struct device *dev, uint32_t channel,
-			     uint32_t period, uint32_t pulse,
-			     pwm_flags_t flags);
+static inline int fast_pwm_configure(const struct device *dev, uint32_t channel, pwm_flags_t flags){
 
-static inline int z_impl_custom_pwm_set_cycles(const struct device *dev,
-					uint32_t channel, uint32_t period,
-					uint32_t pulse, pwm_flags_t flags)
-{
-	const struct custom_pwm_driver_api *api =
-		(const struct custom_pwm_driver_api *)dev->api;
+	const struct custom_pwm_driver_api *api = (const struct custom_pwm_driver_api *)dev->api;
 
-	if (pulse > period) {
-		return -EINVAL;
-	}
-
-	return api->set_cycles(dev, channel, period, pulse, flags);
+	return api->pwm_configure(dev, channel, flags);
 }
+static inline int fast_pwm_set_period(const struct device *dev, uint32_t period_cycles){
 
+	const struct custom_pwm_driver_api *api = (const struct custom_pwm_driver_api *)dev->api;
 
-/**
- * @brief Get the clock rate (cycles per second) for a single PWM output.
- *
- * @param[in] dev PWM device instance.
- * @param channel PWM channel.
- * @param[out] cycles Pointer to the memory to store clock rate (cycles per
- *                    sec). HW specific.
- *
- * @retval 0 If successful.
- * @retval -errno Negative errno code on failure.
- */
-__syscall int custom_pwm_get_cycles_per_sec(const struct device *dev, uint32_t channel,
-				     uint64_t *cycles);
-
-static inline int z_impl_custom_pwm_get_cycles_per_sec(const struct device *dev,
-						uint32_t channel,
-						uint64_t *cycles)
-{
-	const struct custom_pwm_driver_api *api =
-		(const struct custom_pwm_driver_api *)dev->api;
-
-	return api->get_cycles_per_sec(dev, channel, cycles);
+	return api->set_period(dev, period_cycles);
 }
+static inline int fast_pwm_set_duty_cycles(const struct device *dev, uint32_t channel, uint32_t pulse_cycles){
 
+	const struct custom_pwm_driver_api *api = (const struct custom_pwm_driver_api *)dev->api;
 
+	return api->set_duty_cycle(dev, channel, pulse_cycles);
+}
+static inline int fast_pwm_toggle_channel(const struct device *dev, uint32_t channel, bool en){
+
+	const struct custom_pwm_driver_api *api = (const struct custom_pwm_driver_api *)dev->api;
+
+	return api->toggle_channel(dev, channel, en);
+}
  
-/**
- * @brief Set the period and pulse width in nanoseconds for a single PWM output.
- *
- * @note Utility macros such as PWM_MSEC() can be used to convert from other
- * scales or units to nanoseconds, the units used by this function.
- *
- * @param[in] dev PWM device instance.
- * @param channel PWM channel.
- * @param period Period (in nanoseconds) set to the PWM.
- * @param pulse Pulse width (in nanoseconds) set to the PWM.
- * @param flags Flags for pin configuration (polarity).
- *
- * @retval 0 If successful.
- * @retval -ENOTSUP If requested period or pulse cycles are not supported.
- * @retval -errno Other negative errno code on failure.
- */
-static inline int pwm_set(const struct device *dev, uint32_t channel,
-			  uint32_t period, uint32_t pulse, pwm_flags_t flags)
-{
-	int err;
-	uint64_t pulse_cycles;
-	uint64_t period_cycles;
-	uint64_t cycles_per_sec;
-
-	err = custom_pwm_get_cycles_per_sec(dev, channel, &cycles_per_sec);
-	if (err < 0) {
-		return err;
-	}
-
-	period_cycles = (period * cycles_per_sec) / NSEC_PER_SEC;
-	if (period_cycles > UINT32_MAX) {
-		return -ENOTSUP;
-	}
-
-	pulse_cycles = (pulse * cycles_per_sec) / NSEC_PER_SEC;
-	if (pulse_cycles > UINT32_MAX) {
-		return -ENOTSUP;
-	}
-
-	return custom_pwm_set_cycles(dev, channel, (uint32_t)period_cycles,
-			      (uint32_t)pulse_cycles, flags);
-}
-
-/**
- * @brief Set the period and pulse width in nanoseconds from a struct
- *        pwm_dt_spec (with custom period).
- *
- * This is equivalent to:
- *
- *     pwm_set(spec->dev, spec->channel, period, pulse, spec->flags)
- *
- * The period specified in @p spec is ignored. This API call can be used when
- * the period specified in Devicetree needs to be changed at runtime.
- *
- * @param[in] spec PWM specification from devicetree.
- * @param period Period (in nanoseconds) set to the PWM.
- * @param pulse Pulse width (in nanoseconds) set to the PWM.
- *
- * @return A value from pwm_set().
- *
- * @see pwm_set_pulse_dt()
- */
-static inline int pwm_set_dt(const struct pwm_dt_spec *spec, uint32_t period,
-			     uint32_t pulse)
-{
-	return pwm_set(spec->dev, spec->channel, period, pulse, spec->flags);
-}
-
-/**
- * @brief Set the period and pulse width in nanoseconds from a struct
- *        pwm_dt_spec.
- *
- * This is equivalent to:
- *
- *     pwm_set(spec->dev, spec->channel, spec->period, pulse, spec->flags)
- *
- * @param[in] spec PWM specification from devicetree.
- * @param pulse Pulse width (in nanoseconds) set to the PWM.
- *
- * @return A value from pwm_set().
- *
- * @see pwm_set_pulse_dt()
- */
-static inline int pwm_set_pulse_dt(const struct pwm_dt_spec *spec,
-				   uint32_t pulse)
-{
-	return pwm_set(spec->dev, spec->channel, spec->period, pulse,
-		       spec->flags);
-}
-
-/**
- * @brief Validate that the PWM device is ready.
- *
- * @param spec PWM specification from devicetree
- *
- * @retval true If the PWM device is ready for use
- * @retval false If the PWM device is not ready for use
- */
-static inline bool pwm_is_ready_dt(const struct pwm_dt_spec *spec)
-{
-	return device_is_ready(spec->dev);
-}
-
-#include <zephyr/syscalls/pwm.h>
-
-#endif /* ZEPHYR_INCLUDE_DRIVERS_PWM_H_ */
+#endif

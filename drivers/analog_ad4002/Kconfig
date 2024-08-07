@@ -28,7 +28,7 @@ config AD4002_SPI_INIT_PRIORITY
 endif
 
 
-if (PWM || PWM_STM32_CUSTOM_TRIGGER)
+if PWM
 
 module = PWM
 module-str = pwm
