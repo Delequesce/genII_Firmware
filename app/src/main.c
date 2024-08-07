@@ -160,7 +160,7 @@ static void uartIOThread_entry_point(){
 		switch(p_char) {
 			if (activeState == IDLE){
 				case 'C': // Connect to Device
-					uart_poll_out(uart_dev, "K\n");
+					uart_poll_out(uart_dev, 'K');
 					deviceConnected = true;
 					break;
 				case 'S': // Read and alter Test Configuration Structure
@@ -307,7 +307,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		}
 
 		/* Schedule new reading every second and let other threads run */
-		k_msleep(1000);
+		k_msleep(5000);
 	}
 	return;
 }
@@ -317,13 +317,14 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	ARG_UNUSED(unused1);
 	ARG_UNUSED(unused2);
+	//printk("EPlaceholder\n");
 
 	/** Get Current Calibration Data from Flash and read into calibration structure 
 	 * If normal test is running, load the most recent calibration. 
 	 * If test is for calibration, use default values for easy calibration. 
 	*/
 	if (activeState == TESTRUNNING){
-		flash_read(flash_device, PAGE255, &calib, 8);
+		flash_read(flash_device, PAGE200, &calib, 8);
 	}
 
 	/* Data Buffer Initialization */
@@ -331,10 +332,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
     static uint16_t Vr_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
 	static uint16_t Ve_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
     static uint16_t Vr_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
-	for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
+	/*for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
         *(Ve_data + n) = 1;
         *(Vr_data + n) = 1;
-    } 
+    } */
 
 	/* Enable ADC and CC Drive */
 	if (gpio_pin_set_dt(&cc_shdn_low, 1) < 0 || gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
@@ -349,7 +350,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Begin Measurement */
 	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
 	uint16_t N_Averages = 100;
-	uint16_t i, j, n;
+	uint8_t i, j;
+	uint16_t n;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
@@ -365,8 +367,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	unsigned char a_char;
 
 	/* Timing Parameters */
-	uint64_t startTime = k_uptime_get();
-	uint32_t sleepTime;
+	int64_t startTime = k_uptime_get();
+	//printk("EStart Time: %lli\n", startTime);
+	int64_t timeElapsed;
 
 	/* Configure TIA SHDN */
     if (!gpio_is_ready_dt(&d0) || !gpio_is_ready_dt(&d1)) {
@@ -391,10 +394,15 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		k_msleep(100);
 	}
 	#else
+
+
+	int64_t t1, t2, t3, t4, t5; // Timing params for measuring speed
+
 	/* This loop runs each collection for the entire test run time (outer loop) */
-	for(i = 0; i < 10; i++){
+	for(i = 0; i < 30; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
+		t1 = k_uptime_get();
 		for(j = 0; j < N_Averages; j++){
 
 			/* Read Data from ADC */
@@ -402,6 +410,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			k_msleep(SLEEP_TIME_MS);
 			ad4002_stop_read(ad4002_master);
 
+			//t2 = k_uptime_get();
 			/* Copy data to safe memory location */ 
 			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
@@ -413,22 +422,23 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			prev_prev_value_Ve = 0;
 			
 			/* Run algorithm */
+			//t3 = k_uptime_get();
 			for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
-				current_value_Ve = 3*Ve_data_safe[n]/65535.0 + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
+				current_value_Ve = Ve_data_safe[n] + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
 				prev_prev_value_Ve = prev_value_Ve;
 				prev_value_Ve = current_value_Ve; 
 
-				current_value_Vr = 3*Vr_data_safe[n]/65535.0 + 2 * cos_w0 * prev_value_Vr - prev_prev_value_Vr;
+				current_value_Vr = Vr_data_safe[n] + 2 * cos_w0 * prev_value_Vr - prev_prev_value_Vr;
 				prev_prev_value_Vr = prev_value_Vr;
 				prev_value_Vr = current_value_Vr; 
 			}
-
+			//t4 = k_uptime_get();
 			/* Final Step calculates complex FFT bin for each signal */
-			Ve_real = (cos_w0 * prev_value_Ve - prev_prev_value_Ve)/SAMPLES_PER_COLLECTION;
-			Ve_imag = (sin_w0 * prev_value_Ve)/SAMPLES_PER_COLLECTION;
+			Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/SAMPLES_PER_COLLECTION/65535.0f;
+			Ve_imag = 3*(sin_w0 * prev_value_Ve)/SAMPLES_PER_COLLECTION/65535.0f;
 
-			Vr_real = (cos_w0 * prev_value_Vr - prev_prev_value_Vr)/SAMPLES_PER_COLLECTION;
-			Vr_imag = (sin_w0 * prev_value_Vr)/SAMPLES_PER_COLLECTION;
+			Vr_real = 3*(cos_w0 * prev_value_Vr - prev_prev_value_Vr)/SAMPLES_PER_COLLECTION/65535.0f;
+			Vr_imag = 3*(sin_w0 * prev_value_Vr)/SAMPLES_PER_COLLECTION/65535.0f;
 
 			/* Finally, compute Z, G, and C */
 			Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
@@ -438,20 +448,35 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
 			impDat.G = Z_real/mag2Z;
 			impDat.C = -Z_imag/mag2Z/w0;
-		}
+			
+			// Timing Outputs
+			
+			// printk("EMemcopy Time: %lli\n", t3-t2);
+			// printk("EGoertzl Time: %lli\n", t4-t3);
 
-		/* Send data over uart */
-		uart_write_32f(&impDat, 2, 'D');
+		}
 		/* Update calibration moving average */
 		if (activeState == CALIBRATING){
 			Z_real_mean = (Z_real_mean * i + Z_real)/(i+1);
 			Z_imag_mean = (Z_imag_mean * i + Z_imag)/(i+1);
+			printk("EZ_real: %0.4f\n", Z_real_mean);
+		}
+		else{
+			/* Send data over uart */
+			uart_write_32f(&impDat, 2, 'D');
 		}
 
+		/* Write time elapsed */
+		//timeElapsed = k_uptime_get() - startTime;
+		//printk("ETime Elapsed: %lli\n", timeElapsed);
+		//printk("ETime Elapsed: %lli\n", sleepTime);
+
 		/* Sleep until next collection period */
-		sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
-		sleepTime =  1000;
-		k_msleep(sleepTime);
+		//sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
+		//k_msleep(sleepTime);
+		t2 = k_uptime_get();
+		//printk("TTotal loop time: %lli\n", t2-t1);
+		k_msleep(1000);
 	}
 
 	/* Perform additional calibration steps, if necessary */
@@ -460,18 +485,19 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		const float test_Z_imag = 0.0;
 
 		calib.Zfb_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
-		calib.Zfb_imag = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
+		calib.Zfb_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
 
 		/* Send new values over uart*/
 		uart_write_32f(&calib, 2, 'C');
 
 		/* Write to flash memory */
 		//flash_write_protection_set(flash_device, false);
-		flash_write(flash_device, PAGE255, &calib, 8);
+		flash_write(flash_device, PAGE200, &calib, 8);
 		//flash_write_protection_set(flash_device, true);
 	}
 	#endif
 	activeState = IDLE;
+	printk("XXXX\n");
 	return; 
 }
 

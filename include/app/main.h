@@ -26,9 +26,9 @@
 
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1024
-#define SLEEP_TIME_MS 				100
+#define SLEEP_TIME_MS 				2
 #define DEFAULT_COLLECTION_INTERVAL	1
-#define DEFAULT_CALIBRATION_TIME	30
+#define DEFAULT_CALIBRATION_TIME	10
 #define DEFAULT_RUN_TIME			1800
 #define DEFAULT_SPOT_FREQUENCY		1000000
 #define CONVERT_FREQUENCY			1032258
@@ -41,6 +41,7 @@
 #define V_SIG_PERIOD        		64  /* In clock cycles */
 #define N_DATA_BYTES				4 
 #define PAGE255						0x0FF000
+#define PAGE200						0x0C8200
 #define UART_LSB_FIRST				0
 #define UART_MSB_FIRST				1
 #define NUM_THERMISTORS				4
