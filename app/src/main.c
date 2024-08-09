@@ -352,11 +352,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	unsigned char a_char;
 
-	/* Timing Parameters */
-	int64_t startTime = k_uptime_get();
-	//printk("EStart Time: %lli\n", startTime);
-	int64_t timeElapsed;
-
 	/* Configure TIA SHDN */
     if (!gpio_is_ready_dt(&d0) || !gpio_is_ready_dt(&d1)) {
         printk("TIA Not Selected");
@@ -382,13 +377,16 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	#else
 
 
-	int64_t t1, t2, t3, t4, t5; // Timing params for measuring speed
+	int64_t sleepTime, timeStamp; // Timing params for measuring speed
+
+	/* Timing Parameters */
+	int64_t startTime = k_uptime_get();
 
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < 30; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
-		t1 = k_uptime_get();
+		//t1 = k_uptime_get();
 		for(j = 0; j < N_Averages; j++){
 
 			/* Read Data from ADC */
@@ -431,11 +429,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
 			Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1); // Moving Average
 			Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1);
-			
-			// Timing Outputs
-			
-			// printk("EMemcopy Time: %lli\n", t3-t2);
-			// printk("EGoertzl Time: %lli\n", t4-t3);
 
 		}
 		/* Update calibration moving average */
@@ -450,21 +443,21 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
 			impDat.G = 1000 * Z_real/mag2Z;				// Result is in mS
 			impDat.C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+
+			/* Collection timestamp */
+			timeStamp = k_uptime_get();
+
 			/* Send data over uart */
 			uart_write_32f(&impDat, 2, 'D');
+			//printk("E%lli\n", timeStamp);
 		}
 
-		/* Write time elapsed */
-		//timeElapsed = k_uptime_get() - startTime;
-		//printk("ETime Elapsed: %lli\n", timeElapsed);
-		//printk("ETime Elapsed: %lli\n", sleepTime);
-
 		/* Sleep until next collection period */
-		//sleepTime = (test_cfg->collectionInterval) * 1000 - k_uptime_delta(&startTime);
-		//k_msleep(sleepTime);
-		t2 = k_uptime_get();
+		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp+startTime;
+		k_msleep(sleepTime);
+		//t2 = k_uptime_get();
 		//printk("TTotal loop time: %lli\n", t2-t1);
-		k_msleep(1000);
+		//k_msleep(1000);
 	}
 
 	/* Perform additional calibration steps, if necessary */
