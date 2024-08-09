@@ -10,7 +10,6 @@
 #include <app/drivers/ad4002.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/pwm.h>
-#include <app/drivers/pwm_stm32_custom_fast.h>
 #include <stm32_ll_tim.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/drivers/flash.h>
@@ -36,13 +35,15 @@ static struct calibration_data calib = {
 
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
-k_tid_t heater_tid; // Calibration Measurement Thread
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
 K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
+#if FREE_RUN
+K_THREAD_DEFINE(ia, IA_STACK_SIZE, testThread_entry_point, &test_cfg, NULL, NULL, IA_THREAD_PRIORITY, 0, 0);
+#else
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
-
+#endif
 /* Relevant Device Tree Structures */
 const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 static const struct device *flash_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
@@ -103,13 +104,6 @@ int main(){
 		return 0;
 	}
 	
-	/* Configure and enable PWM signals */
-	fast_pwm_configure(ccDriver.dev, ccDriver.channel, ccDriver.flags);
-	fast_pwm_configure(heaterPwm.dev, heaterPwm.channel, heaterPwm.flags);
-	if (fast_pwm_set_period(ccDriver.dev, V_SIG_PERIOD) < 0){
-		printk("Error: Failed to set up timer");
-		return -1;
-	}
 	printk("Setup Completed\n");
 
 	k_yield();
@@ -135,18 +129,9 @@ static int configure_uart_device(const struct device *dev){
 }
 
 /* Polling based UART handler thread */
+#if FREE_RUN
+#else
 static void uartIOThread_entry_point(){
-
-	#if FREE_RUN 
-	activeState = TESTRUNNING;  
-	/* Allocate memory and spawn new thread */
-	ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-					K_THREAD_STACK_SIZEOF(IA_stack_area),
-					testThread_entry_point, 
-					&test_cfg, NULL, NULL, 
-					IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-	k_yield(); // Yields to newly created thread because priority is higher than UART Thread. UART Thread goes to "Ready" State
-	#else
 	unsigned char p_char;
 	int ret;
 	while(1){
@@ -214,9 +199,9 @@ static void uartIOThread_entry_point(){
 		/* Yield to newly spawned thread or to heater thread */
 		k_yield();
 	}
-	#endif
 	return;
 }
+#endif
 
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3){
 
@@ -298,8 +283,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			pulse_cycles = (uint32_t)(K_P * heater_errP + K_I * heater_errI);
 
 			// Update duty cycle using zephyr driver
-			//pulse_cycles = 32;
-			if (fast_pwm_set_duty_cycles(heaterPwm.dev, heaterPwm.channel, pulse_cycles) < 0){
+			pulse_cycles = 32;
+			
+			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
 				printk("Error: Failed to set heater pulse");
 				return -1;
 			}
@@ -307,7 +293,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		}
 
 		/* Schedule new reading every second and let other threads run */
-		k_msleep(5000);
+		k_msleep(2000);
 	}
 	return;
 }
@@ -342,7 +328,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
         printk("SHDN pins not properly set");
 		return 0;
 	}
-	if (fast_pwm_set_duty_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD/2) < 0){
+	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
 		printk("Error: Failed to setup CC Drive");
 		return -1;
 	}
@@ -445,9 +431,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
 			Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1); // Moving Average
 			Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1);
-			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-			impDat.G = Z_real/mag2Z;
-			impDat.C = -Z_imag/mag2Z/w0;
 			
 			// Timing Outputs
 			
@@ -460,8 +443,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			Z_real_mean = (Z_real_mean * i + Z_real)/(i+1);
 			Z_imag_mean = (Z_imag_mean * i + Z_imag)/(i+1);
 			printk("EZ_real: %0.4f\n", Z_real_mean);
+			printk("EZ_real: %0.4f\n", Z_imag_mean);
 		}
 		else{
+			/* Final Calculation */
+			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
+			impDat.G = 1000 * Z_real/mag2Z;				// Result is in mS
+			impDat.C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 			/* Send data over uart */
 			uart_write_32f(&impDat, 2, 'D');
 		}
@@ -492,35 +480,46 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 		/* Write to flash memory */
 		//flash_write_protection_set(flash_device, false);
+		flash_erase(flash_device, PAGE200, 8);
 		flash_write(flash_device, PAGE200, &calib, 8);
 		//flash_write_protection_set(flash_device, true);
+		activeState = IDLE;
+		return;
 	}
 	#endif
 	activeState = IDLE;
-	printk("XXXX\n");
+	printk("X\n");
 	return; 
 }
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
 static void uart_write_32f(float* data, uint8_t numData, char messageCode){
 	
-	char buffer[30];
-	uint8_t n = 0;
+	char buffer1[9];
+	char buffer2[9];
+
+	uint8_t n1, n2 = 0;
 	if (numData == 1){
-		n = sprintf(buffer, "%c%f\n", messageCode, *data);
+		n1 = sprintf(buffer1, "%c%f\n", messageCode, *data);
+		for(int i = 0; i < n1; i++){
+			uart_poll_out(uart_dev, buffer1[i]);
+		}
 	}
 	else if (numData == 2){
-		float data1 = *data;
+		float data_float = *data; 
+		n1 = sprintf(buffer1, "%c%0.4f", messageCode, data_float);
 		*data++;
-		float data2 = *data;
-		n = sprintf(buffer, "%c%f%f\n", messageCode, data1, data2);
-	}
+		data_float = *data;
+		n2 = sprintf(buffer2, "%0.4f\n", data_float);
 
-	// Can also replace with printk
-	for(int i = 0; i < n; i++){
-		uart_poll_out(uart_dev, buffer[i]);
+		for(int i = 0; i < n1; i++){
+			uart_poll_out(uart_dev, buffer1[i]);
+		}
+		uart_poll_out(uart_dev, '!');
+		for(int i = 0; i < n2; i++){
+			uart_poll_out(uart_dev, buffer2[i]);
+		}
 	}
-	
 	return;
 }
 

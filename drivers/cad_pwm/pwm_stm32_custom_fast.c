@@ -198,7 +198,7 @@ static int pwm_stm32_configure(const struct device *dev, uint32_t channel, pwm_f
 	ll_channel = ch2ll[channel - 1u];
 
 	oc_init.OCMode = LL_TIM_OCMODE_PWM1;
-	oc_init.OCState = LL_TIM_OCSTATE_ENABLE;
+	//oc_init.OCState = LL_TIM_OCSTATE_ENABLE;
 	oc_init.OCPolarity = get_polarity(flags);
 
 	if (LL_TIM_OC_Init(cfg->timer, ll_channel, &oc_init) != SUCCESS) {
@@ -215,7 +215,7 @@ static int pwm_stm32_configure(const struct device *dev, uint32_t channel, pwm_f
 static int pwm_stm32_set_period(const struct device *dev, uint32_t period_cycles){
 	const struct pwm_stm32_config *cfg = dev->config;
 	LL_TIM_SetAutoReload(cfg->timer, period_cycles);
-	//LL_TIM_GenerateEvent_UPDATE(cfg->timer); // May need to generate an update event for starting counter
+	LL_TIM_GenerateEvent_UPDATE(cfg->timer); // May need to generate an update event for starting counter
 	return 0;
 }
 static int pwm_stm32_set_duty_cycle(const struct device *dev, uint32_t channel, uint32_t pulse_cycles){
