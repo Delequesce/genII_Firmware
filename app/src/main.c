@@ -18,7 +18,11 @@
 #include <app/main.h>
 
 /* Default States */
+#if FREE_RUN
+enum testStates activeState = FREERUNNING;
+#else
 enum testStates activeState = IDLE;
+#endif
 enum heaterStates heaterState = NOT_HEATING; 
 
 static struct test_config test_cfg = {
@@ -37,7 +41,9 @@ static struct calibration_data calib = {
 k_tid_t ia_tid; // IA Measurement Thread
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
+#if HEATER
 K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
+#endif
 #if FREE_RUN
 K_THREAD_DEFINE(ia, IA_STACK_SIZE, testThread_entry_point, &test_cfg, NULL, NULL, IA_THREAD_PRIORITY, 0, 0);
 #else
@@ -185,6 +191,15 @@ static void uartIOThread_entry_point(){
 					activeState = EQC;
 					//runEQC();
 					break;
+				case 'F': // Free Run
+					activeState = FREERUNNING;
+					/* Allocate memory and spawn new thread */
+					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+									K_THREAD_STACK_SIZEOF(IA_stack_area),
+									testThread_entry_point, 
+									&test_cfg, NULL, NULL, 
+									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+					break;
 			}
 			else{
 				case 'X': // Stop Test
@@ -265,7 +280,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		}
 		for (size_t i = 0U; i < NUM_THERMISTORS; i++){
 			if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
-				printk("Temperatures on board are spatially uneven\n");
+				printk("ETemperatures on board are spatially uneven\n");
 			}
 		}
 		/* Send temperature reading to GUI */
@@ -336,7 +351,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Begin Measurement */
 	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
 	uint16_t N_Averages = 100;
-	uint8_t i, j;
+	uint16_t i, j;
 	uint16_t n;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
@@ -363,18 +378,56 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		return 0;
 	}
 
-	#if FREE_RUN
-	while(1){
-		ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
-		k_msleep(SLEEP_TIME_MS);
-		ad4002_stop_read(ad4002_master);
+	if(activeState == FREERUNNING){
+		while(1){
+			
+			ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+			k_msleep(SLEEP_TIME_MS);
+			ad4002_stop_read(ad4002_master);
+		#if FREE_RUN
+		}
+		#else
 
-		/* Copy data to safe memory location */ 
-		memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-		memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
-		k_msleep(100);
+			/* Copy data to safe memory location */ 
+			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+
+			/* Loop through and send all data to UI */
+			char buffer[9];
+			float tempFloat;
+			unsigned char s_char;
+			uint8_t n, k;
+			/* We have to chunk the data to avoid buffer overflow */
+			
+			for(j = 0; j < 32; j++){
+				s_char = 0;
+				uart_poll_out(uart_dev, 'F');
+				for(i = 32 * j; i < 32*(j+1); i++){
+					tempFloat = 3*Ve_data_safe[i]/65535.0f;
+					n = snprintf(buffer, 9, "%f", tempFloat);
+					for(k = 0; k < n; k++){
+						uart_poll_out(uart_dev, buffer[k]);
+					}
+					uart_poll_out(uart_dev, '!');
+					tempFloat = 3*Vr_data_safe[i]/65535.0f;
+					n = snprintf(buffer, 9, "%f", tempFloat);
+					for(k = 0; k < n; k++){
+						uart_poll_out(uart_dev, buffer[k]);
+					}
+					uart_poll_out(uart_dev, '!');
+				}
+				uart_poll_out(uart_dev, '\n');
+				/* Wait for response from UI before sending more data */
+				while (s_char != 'K'){
+					uart_poll_in(uart_dev, &s_char);
+				}
+			}
+			
+			k_msleep(100);
+		}
+		#endif
 	}
-	#else
+	else{
 
 
 	int64_t sleepTime, timeStamp; // Timing params for measuring speed
@@ -479,7 +532,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		activeState = IDLE;
 		return;
 	}
-	#endif
+	}
 	activeState = IDLE;
 	printk("X\n");
 	return; 

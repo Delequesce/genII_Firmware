@@ -2,7 +2,8 @@
 #define MAIN_INCLUDE_HEADER
 
 /* Configuration flags */
-#define FREE_RUN					0
+#define FREE_RUN					1
+#define HEATER						0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -26,7 +27,7 @@
 
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1024
-#define SLEEP_TIME_MS 				2
+#define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
 #define DEFAULT_RUN_TIME			1800
@@ -63,7 +64,8 @@ enum testStates {
 	IDLE,
 	TESTRUNNING,
 	CALIBRATING,
-	EQC
+	EQC,
+	FREERUNNING,
 };
 
 enum heaterStates {
