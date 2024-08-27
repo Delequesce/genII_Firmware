@@ -29,10 +29,6 @@
 #define CNV_HEADSUP_TIME	16 // 10 Clock cycles is about 160 nsec at 64 MHz
 #define RX_BUFFER_LENGTH    2
 
-// Comment out to switch between manual and DMA read modes
-#define USE_DMA
-#define USE_DMA_TX
-//#define USE_DMA_INTERRUPT
 
 /* DMA Macros */
 #define DMA_CHANNEL_CONFIG(node, dir)	    DT_DMAS_CELL_BY_NAME(node, dir, channel_config)
@@ -83,18 +79,19 @@ struct stream {
 
 uint64_t startTime;
 uint16_t numSamples;
+uint32_t ll_channel;
 
 // Manual Read Data structures
 static uint16_t rx_data[1024];
 uint32_t count; 
+
 
 /* Read only configuration data set at build time*/
 struct ad4002_config{
 	SPI_TypeDef* spi_block;
 	struct pwm_dt_spec cnv_pwm_spec;
 	uint8_t sample_period; 
-	void (*irq_config_func)(const struct device *dev);
-	void (*data_irq_func)(const struct device *dev);
+	void (*dma_irq_config_func)(const struct device *dev);
 	struct stream dma_rx; 
 	struct stream dma_tx;
 	bool master;
@@ -105,6 +102,7 @@ struct ad4002_config{
 /* Mutable data, stored in RAM */
 struct ad4002_data{
 	uint32_t N_samples;
+	ad4002_irq_callback_user_data_t user_cb;
 };
 
 /** PWM configuration. */
@@ -116,17 +114,20 @@ struct pwm_stm32_config {
 	const struct pinctrl_dev_config *pcfg;
 };
 
-static int analog_ad4002_continuous_read(const struct device *dev_master, const struct device *dev_slave, uint16_t* rx_buffer_1, uint16_t* rx_buffer_2, const uint32_t N_samples)
+/** Timer Channel to LL mapping. */
+static const uint32_t ch2ll[6] = {
+	LL_TIM_CHANNEL_CH1, LL_TIM_CHANNEL_CH2,
+	LL_TIM_CHANNEL_CH3, LL_TIM_CHANNEL_CH4,
+	LL_TIM_CHANNEL_CH5, LL_TIM_CHANNEL_CH6
+};
+
+static int analog_ad4002_init_read(const struct device *dev_master, const struct device *dev_slave, uint16_t* rx_buffer_1, uint16_t* rx_buffer_2, const uint32_t N_samples)
 {
 	int ret;
 	count = 0; 
 
 	/* Sets up SPI and DMA for each ADC */
-	#ifdef USE_DMA_TX
 	spi_dma_setup(dev_master, rx_buffer_1, N_samples, true);
-	#else
-	spi_dma_setup(dev_master, rx_buffer_1, N_samples, false);
-	#endif
 	spi_dma_setup(dev_slave, rx_buffer_2, N_samples, false);
 	
 	/* Setup PWM CNV Signal and heads-up timer */
@@ -134,12 +135,15 @@ static int analog_ad4002_continuous_read(const struct device *dev_master, const 
 	const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
 	const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
 
-	/* Enable the CNV signal */
-	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, CNV_HIGH_TIME, cfg->cnv_pwm_spec.flags);
+	/* Setup the CNV PWM Signal */
+	LL_TIM_EnableCounter(pwm_cfg->timer);
+	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
+	LL_TIM_OC_SetPolarity(pwm_cfg->timer, ll_channel, LL_TIM_OCPOLARITY_HIGH);
+	LL_TIM_OC_SetCompareCH1(pwm_cfg->timer, CNV_HIGH_TIME); // For CNV Timer, heads up is already set earlier
+	LL_TIM_EnableARRPreload(pwm_cfg->timer);
+	LL_TIM_OC_EnablePreload(pwm_cfg->timer, ll_channel);
+	LL_TIM_SetAutoReload(pwm_cfg->timer, cfg->sample_period);
 
-	/* Enable the timer to start reads */
-	SET_BIT(pwm_cfg->timer->CR1, TIM_CR1_CEN); // Enable Timer 1
-	
 	return 0;
 	
 }
@@ -150,11 +154,11 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 	SPI_TypeDef* spi_block = cfg->spi_block;
 
 	/* Set DMA memory location */
-	#ifdef USE_DMA
 	struct stream *dma_stream_rx = &(cfg->dma_rx);
 	DMA_Channel_TypeDef* dma_block_rx = dma_stream_rx->reg + 1; 
 	dma_block_rx = dma_block_rx + dma_stream_rx->channel -1;
 	DMA_Channel_TypeDef* dma_block_tx;
+
 	/* DMA Address and Data Length Config */
 	WRITE_REG(dma_block_rx->CMAR, rx_buffer);
 	WRITE_REG(dma_block_rx->CPAR, &spi_block->DR);
@@ -166,100 +170,92 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 		/* DMA Address and Data Length Config */
 		WRITE_REG(dma_block_tx->CMAR, &cfg->tx_buffer);
 		WRITE_REG(dma_block_tx->CPAR, &spi_block->DR);
-		WRITE_REG(dma_block_tx->CNDTR, 1);
+		WRITE_REG(dma_block_tx->CNDTR, N_samples);
+
+		/* Set up DMA callback */
+		// To Do...
 	}
 
-	#endif
-
 	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
-	#ifdef USE_DMA
 	SET_BIT(spi_block->CR2, (SPI_CR2_RXDMAEN));
-	#endif
 
 	SET_BIT(spi_block->CR1, SPI_CR1_SPE);
 
-	#ifdef USE_DMA
 	SET_BIT(dma_block_rx->CCR, DMA_CCR_EN);
 	if(tx_rx){
 		SET_BIT(dma_block_tx->CCR, DMA_CCR_EN);
 	}
-	#endif
+
 }
 
 /* Probably need to add more here to ensure everything is properly reset */
-static int analog_ad4002_stop_read(const struct device *dev){
+static int analog_ad4002_start_read(const struct device *dev, const uint32_t N_samples){
 	const struct ad4002_config *cfg = dev->config;
-	//printk("Stopping Read");
-	//count = 0; Not used in DMA modes
-
-	/* Disable the timer to stop reads */
 	const struct pwm_stm32_config *pwm_cfg = cfg->cnv_pwm_spec.dev->config;
-	CLEAR_BIT(pwm_cfg->timer->CR1, TIM_CR1_CEN); // Enable Timer 1
 
-	/* Disable the CNV signal */
-	pwm_set_cycles(cfg->cnv_pwm_spec.dev, cfg->cnv_pwm_spec.channel,cfg->sample_period, 0, cfg->cnv_pwm_spec.flags);
+	/* Reset TX DMA CNDTR */
+	struct stream *dma_stream_tx = &(cfg->dma_tx);
+	DMA_Channel_TypeDef* dma_block_tx = dma_stream_tx->reg + 1; 
+	dma_block_tx = dma_block_tx + dma_stream_tx->channel -1;
+	CLEAR_BIT(dma_block_tx->CCR, DMA_CCR_EN);
+	WRITE_REG(dma_block_tx->CNDTR, N_samples);
+	SET_BIT(dma_block_tx->CCR, DMA_CCR_EN);
+
+	/* Enable the Timer 1 Output compares */
+	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
+
+	LL_TIM_OC_SetMode(pwm_cfg->timer, ll_channel, LL_TIM_OCMODE_PWM1);
+	GPIO_TypeDef *pa = GPIOA;
+	MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_0, GPIO_MODER_MODE8_1);
+	LL_TIM_CC_EnableChannel(pwm_cfg->timer, (ll_channel | LL_TIM_CHANNEL_CH2));
+	LL_TIM_GenerateEvent_UPDATE(pwm_cfg->timer);
 
 	return 0; 
+}
+
+static int analog_ad4002_irq_callback_set(const struct device *dev, ad4002_irq_callback_user_data_t cb)
+{
+	struct ad4002_data *dev_data = dev->data;
+	struct ad4002_config *cfg = dev->config;
+	dev_data->user_cb = cb;
+
+	return 0;
 }
 
 static int ad4002_init(const struct device *dev){
 	
 	const struct ad4002_config *cfg = dev->config;
-	//startTime = k_uptime_get();
 
-	#ifdef USE_DMA
 	/* DMA Clock configuration, might not be necessary since DMA driver should handle */
 	struct stream *dma_stream_rx = &(cfg->dma_rx);
 	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
 			     (clock_control_subsys_t) &dma_stream_rx->pclken) != 0) {
 		return -EIO;
 	}
-	#ifdef USE_DMA_TX
 	struct stream *dma_stream_tx = &(cfg->dma_tx);
-	// if(cfg->master){
-	// 	dma_stream_tx = &(cfg->dma_tx);
-	// 	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
-	// 				(clock_control_subsys_t) &dma_stream_tx->pclken) != 0) {
-	// 		return -EIO;
-	// 	}	
-	// }
-	#endif
+
 	// Enable DMA Mux Clock
 	LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMAMUX1);
-	#endif
 
 	SPI_TypeDef* spi_block = cfg->spi_block;
 
-	/* Timer Setup. IF DMA is used, replace interrupt configure with DMA configure */
+	/* Timer Setup */
 	if (cfg->master){
 		const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
 		const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
 		TIM_TypeDef* tim_block = pwm_cfg->timer;
-		CLEAR_BIT(tim_block->CR1, TIM_CR1_CEN); // Disable Timer 1
 		//WRITE_REG(tim_block->CCR2, 64-CNV_HEADSUP_TIME); // Set Duty cycle for heads-up timer
 		WRITE_REG(tim_block->CCR2, CNV_HEADSUP_TIME); // Set Duty cycle for heads-up timer
-		SET_BIT(tim_block->CCER, TIM_CCER_CC2E); // Enable Cpature Compare Channel 2
-		#ifdef USE_DMA_TX
 		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2DE)); // Trigger a DMA request on channel 2 capture compare
-		#else
-		WRITE_REG(tim_block->DIER, (TIM_DIER_CC2IE)); // Trigger an interrupt on channel 2 capture compare
-		#endif
+
 	}
 
 	/* DMA Initialization */
-	#ifdef USE_DMA
 	DMA_TypeDef* dma_base_block_rx = dma_stream_rx->reg;
 	DMA_Channel_TypeDef* dma_block_rx = dma_stream_rx->reg + 1; 
 	dma_block_rx = dma_block_rx + dma_stream_rx->channel -1;
 
 	LL_DMA_SetPeriphRequest(dma_base_block_rx, dma_stream_rx->channel, dma_stream_rx->cfg.dma_slot); // Sets up DMA Mux
-	/*LL_DMA_SetDataTransferDirection(dma_base_block, dma_stream->channel, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
-	LL_DMA_SetChannelPriorityLevel(dma_base_block, dma_stream->channel, dma_stream->cfg.channel_priority);
-	LL_DMA_SetMode(dma_base_block, dma_stream->channel, dma_stream->cfg.cyclic);
-	LL_DMA_SetPeriphIncMode(dma_base_block, dma_stream->channel, dma_stream->src_addr_increment);
-	LL_DMA_SetMemoryIncMode(dma_base_block, dma_stream->channel, dma_stream->dst_addr_increment);
-	LL_DMA_SetPeriphSize(dma_base_block, dma_stream->channel, LL_DMA_PDATAALIGN_HALFWORD);
-	LL_DMA_SetMemorySize(dma_base_block, dma_stream->channel, LL_DMA_MDATAALIGN_HALFWORD);*/
 
 	dma_block_rx->CCR |= ((dma_stream_rx->cfg.cyclic << DMA_CCR_CIRC_Pos) |
 				(dma_stream_rx->cfg.source_data_size << DMA_CCR_PSIZE_Pos) |
@@ -268,7 +264,6 @@ static int ad4002_init(const struct device *dev){
 				(dma_stream_rx->mem_addr_increment << DMA_CCR_MINC_Pos) |
 				(dma_stream_rx->cfg.channel_priority << DMA_CCR_PL_Pos));
 
-	#ifdef USE_DMA_TX
 	if(cfg->master){
 
 		DMA_TypeDef* dma_base_block_tx = dma_stream_tx->reg;
@@ -284,9 +279,10 @@ static int ad4002_init(const struct device *dev){
 					(dma_stream_tx->mem_addr_increment << DMA_CCR_MINC_Pos) |
 					(dma_stream_tx->cfg.channel_priority << DMA_CCR_PL_Pos) |
 					(dma_stream_tx->cfg.channel_direction << DMA_CCR_DIR_Pos));
+
+		cfg->dma_irq_config_func(dev);
+		SET_BIT(dma_block_tx->CCR, DMA_CCR_TCIE); // Enables interrupt request on transfer complete
 	}
-	#endif /* USE_DMA_TX */
-	#endif /* USE_DMA */
 
 	/* Initialize SPI bus (Low Level) */
 	if (cfg->master){
@@ -298,158 +294,68 @@ static int ad4002_init(const struct device *dev){
 		SET_BIT(spi_block->CR2, SPI_CR2_DS_3); // 16b 
 	}
 
-	//cfg->data_irq_func(dev);
-	#ifdef USE_DMA
-		#ifdef USE_DMA_INTERRUPT
-		if (cfg->master){
-			DMA_Channel_TypeDef* dma_block = dma_stream_tx->reg + 1; 
-			dma_block = dma_block + dma_stream_tx->channel -1;
-			MODIFY_REG(dma_block->CCR, 0, (DMA_CCR_TCIE));
-		}
-		#endif
-	#else
-		if (cfg->master){
-			SET_BIT(spi_block->CR2, SPI_CR2_RXNEIE); // Set for RX interrpt with manual read
-		}
-	#endif 	
-
-	#ifndef USE_DMA_TX
-	/* Configure and Enable IRQ in NVIC */
-	cfg->irq_config_func(dev);
-	#endif
-
 	return 0;
 }
 
-/** Fastest Possible Interrupt handler for SPI reads following Timer Update
- * The function handle will directly be placed in the MCU vector table. 
- * No data passing is permitted
-*/
-ISR_DIRECT_DECLARE(pwm_irq_handler_direct)
+
+static const struct ad4002_driver_api ad4002_api = {
+	.init_read = analog_ad4002_init_read,
+	.start_read = analog_ad4002_start_read,
+	.irq_callback_set = analog_ad4002_irq_callback_set,
+};
+
+/* This is the callback function for when the request number of samples have been read and transferred by DMA1, CH2. Should not be direct declare because we need  */
+void dma_irq_tcie(const struct device *dev)
 {
-	// Takes about 12 cycles to write the SPI data register and clear the Timer Interrupt Flag
-	//printk("H\n");
-	uint32_t* SPI_SLAVE_CR1 = SPI2_BASE;
-	CLEAR_BIT((*SPI_SLAVE_CR1), SPI_CR1_SSI);
-	uint32_t* SPI_MASTER_DR = SPI1_BASE + 0xC;
-	WRITE_REG((*SPI_MASTER_DR), 0xFFFF);
-	uint32_t* timer_SR = TIM1_BASE + 0x10;
-	CLEAR_BIT((*timer_SR), TIM_SR_CC2IF);
-	ISR_DIRECT_PM();
+	/* Disable Timer 1 Output compare and wake up */
+	const struct ad4002_config *cfg = dev->config;
+	const struct device *pwm_device = cfg->cnv_pwm_spec.dev;
+	const struct pwm_stm32_config *pwm_cfg = pwm_device->config;
 
-	return 1;
-}
+	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
+	//LL_TIM_OC_SetMode(pwm_cfg->timer, ll_channel, LL_TIM_OCMODE_FORCED_INACTIVE);
+	LL_TIM_CC_DisableChannel(pwm_cfg->timer, (ll_channel|LL_TIM_CHANNEL_CH2));
+	// Set GPIO pin to Output (Ch1 PA8)
+	GPIO_TypeDef *pa = GPIOA;
+	MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_1, GPIO_MODER_MODE8_0);
 
-/* Simple DMA Test Interrupt */
-// ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
-// {
-// 	/* Clear Flags */
-// 	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;
-// 	WRITE_REG((*SPI_DMA_1_IFCR), 0xFFFF);
-	
-// 	return 1;
-// }
-
-
-#ifdef USE_DMA_INTERRUPT
-ISR_DIRECT_DECLARE(dma_irq_tcie_direct)
-{
 	/* Clear Flags */
 	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;
 	WRITE_REG((*SPI_DMA_1_IFCR), 0xFFFF);
 
-	/* Copy data to next memory location */
-
-	//printk("Transfer Completed\n");
-	count++;
-	if (count > 1024){
-		uint32_t* TIM1_CR = TIM1_BASE;
-		CLEAR_BIT((*TIM1_CR), TIM_CR1_CEN); // Enable Timer 1
-	}
-	return 1;
+	/* Call callback function */
+	struct ad4002_data *dev_data = dev->data;
+	dev_data->user_cb(dev);
 }
-#else
-ISR_DIRECT_DECLARE(spi_irq_handler_direct)
-{
-	uint32_t* SPI_MASTER_DR = SPI1_BASE + 0xC;
-	uint16_t data = READ_REG((*SPI_MASTER_DR));
-	*(rx_data + count) = data;
-	//printk("Data: %d\n", rx_data[count]);
-	//printk("Data: %d\n", READ_REG((*SPI_MASTER_DR)));
-	count++;
-	if (count > 1024){
-		uint32_t* TIM1_CR = TIM1_BASE;
-		CLEAR_BIT((*TIM1_CR), TIM_CR1_CEN); // Enable Timer 1
-	}
-	return 1;
+
+
+// Below, 0xC is the NVIC interrupt position for DMA1_CH2
+#define IRQ_DMA_TCIE_CONFIG_MASTER(index)											\
+static void setup_dma_tcie_callback_##index(const struct device *dev){				\
+			printk("DMA MASTER Interrupt enabled\n");                   			\
+			IRQ_CONNECT(0xD, 0, dma_irq_tcie, DEVICE_DT_INST_GET(index), 0);		\
+			irq_enable(0xD);														\
 }
-#endif
 
-
-static const struct ad4002_driver_api ad4002_api = {
-	.continuous_read = analog_ad4002_continuous_read,
-	.stop_read = analog_ad4002_stop_read,
-};
-#ifdef USE_DMA_INTERRUPT
-#define IRQ_CONFIG_FUNC_DMA_TCIE(index)												\
-static void setUpRXInterrupt_##index(const struct device *dev){						\
-	printk("DMA INTERRUPT ENABLED\n");                        						\
-	IRQ_DIRECT_CONNECT(0xC,															\
-			0,  																	\
-			dma_irq_tcie_direct,				  									\
-			IRQ_ZERO_LATENCY);							           	 				\
-	irq_enable(0xC);																\
+#define IRQ_DMA_TCIE_CONFIG_SLAVE(index)											\
+static void setup_dma_tcie_callback_##index(const struct device *dev){				\
+			printk("DMA SLAVE Interrupt enabled\n");                   				\
 }
-#else
-#define IRQ_CONFIG_FUNC_MANUAL_READ(index)											\
-static void setUpRXInterrupt_##index(const struct device *dev){						\
-	printk("Manual Read enabled\n");                        						\
-			IRQ_DIRECT_CONNECT(DT_IRQ(SPI_NODE(index), irq),						\
-					DT_IRQ(SPI_NODE(index), priority),  							\
-					spi_irq_handler_direct,				  							\
-					IRQ_ZERO_LATENCY);							           	 		\
-			irq_enable(DT_IRQ(SPI_NODE(index), irq));								\
-}
-#endif
-#define IRQ_CONFIG_FUNC_MASTER(index)												\
-	static void pwm_irq_config_##index(const struct device *dev)     				\
-    {   						                                  					\
-			printk("Master IRQ Connecting\n");                        				\
-			IRQ_DIRECT_CONNECT(DT_IRQ_BY_NAME(PWM_PARENT_TIMER(index), cc, irq),	\
-					DT_IRQ_BY_NAME(PWM_PARENT_TIMER(index), cc, priority),  		\
-					pwm_irq_handler_direct,				  							\
-					IRQ_ZERO_LATENCY);							           	 		\
-			irq_enable(DT_IRQ_BY_NAME(PWM_PARENT_TIMER(index), cc, irq));			\
-    }; 
-
-#define IRQ_CONFIG_FUNC_SLAVE(index)												\
-	static void pwm_irq_config_##index(const struct device *dev)     				\
-    {   						                                  					\
-			printk("Slave IRQ Connecting\n");                        				\
-    };  																		
-
+																		
 #define AD4002_NODE(index) 	DT_DRV_INST(index) 
 #define SPI_MASTER(index) 	DT_PROP(AD4002_NODE(index), spi_master)
 #define PWM_RETURN(index) 	COND_CODE_1(SPI_MASTER(index), (PWM_DT_SPEC_INST_GET(index)), (NULL))
-#define IRQ_DECLARE(index)  COND_CODE_1(SPI_MASTER(index), (IRQ_CONFIG_FUNC_MASTER(index)), (IRQ_CONFIG_FUNC_SLAVE(index)));
-#ifdef USE_DMA_INTERRUPT
-#define IRQ_DATA_FUNC(index) IRQ_CONFIG_FUNC_DMA_TCIE(index)
-#else
-#define IRQ_DATA_FUNC(index) IRQ_CONFIG_FUNC_MANUAL_READ(index)
-#endif
-
+#define IRQ_DMA_TCIE_CONFIG(index)  COND_CODE_1(SPI_MASTER(index), (IRQ_DMA_TCIE_CONFIG_MASTER(index)), (IRQ_DMA_TCIE_CONFIG_SLAVE(index)));
 
 #define AD4002_DEVICE_INIT(index) 										\
 																		\
-	IRQ_DECLARE(index);													\
-	IRQ_DATA_FUNC(index);												\
+	IRQ_DMA_TCIE_CONFIG(index);											\
 																		\
 	static const struct ad4002_config ad4002_cfg_##index = { 			\
 		.spi_block = DT_REG_ADDR(SPI_NODE(index)), 						\
 		.cnv_pwm_spec = PWM_RETURN(index),								\
 		.sample_period = DT_INST_PROP_OR(index, sample_period, 0),		\
-		.irq_config_func = pwm_irq_config_##index,						\
-		.data_irq_func = setUpRXInterrupt_##index,						\
+		.dma_irq_config_func = setup_dma_tcie_callback_##index,			\
 		SPI_DMA_CHANNEL(SPI_NODE(index))						        \
 		.master = SPI_MASTER(index),									\
 		.instance = index,												\

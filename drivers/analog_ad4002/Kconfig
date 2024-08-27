@@ -4,8 +4,6 @@ menuconfig AD4002
     depends on DT_HAS_ST_STM32_PWM_ENABLED
     select SPI
     select SPI_STM32 if DT_HAS_ST_STM32_SPI_ENABLED
-    select DMA
-    select DMA_STM32
     select PWM
 	select USE_STM32_LL_TIM
 	select USE_STM32_LL_RCC if SOC_SERIES_STM32F4X || SOC_SERIES_STM32F7X || SOC_SERIES_STM32H7X

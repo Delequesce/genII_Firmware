@@ -2,7 +2,7 @@
 #define MAIN_INCLUDE_HEADER
 
 /* Configuration flags */
-#define FREE_RUN					1
+#define FREE_RUN					0
 #define HEATER						0
 
 /* DT NODELABELS */
@@ -20,13 +20,13 @@
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
 #define UARTIO_THREAD_PRIORITY   	5
 #define HEATER_THREAD_PRIORITY		5
-#define IA_STACK_SIZE            	2048
+#define IA_STACK_SIZE            	4096
 #define UARTIO_STACK_SIZE        	1024
 #define HEATER_STACK_SIZE			1024
 #define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
 /* Measurement params */
-#define SAMPLES_PER_COLLECTION  	1024
+#define SAMPLES_PER_COLLECTION  	2048
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -100,6 +100,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
 static float adc_mv_to_temperature(int32_t val_mv);
+static void dma_tcie_callback();
 
 
 #endif

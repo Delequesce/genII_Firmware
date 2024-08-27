@@ -378,13 +378,21 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		return 0;
 	}
 
+	/* Sets up necessary peripherals (DMA, SPI, Timers) for reads. */
+	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
+	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
+
 	if(activeState == FREERUNNING){
+		int8_t N_chunks = SAMPLES_PER_COLLECTION/32;
 		while(1){
 			
-			ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
-			k_msleep(SLEEP_TIME_MS);
-			ad4002_stop_read(ad4002_master);
+			/* Within loop, start read, wait for interrupt, then processing */
+			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+			k_msleep(SLEEP_TIME_MS); // Thread sleeps until DMA callback is triggered
+			// Processing Code
+			//...
 		#if FREE_RUN
+			k_msleep(1000);
 		}
 		#else
 
@@ -399,7 +407,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			uint8_t n, k;
 			/* We have to chunk the data to avoid buffer overflow */
 			
-			for(j = 0; j < 32; j++){
+			for(j = 0; j < N_chunks; j++){
 				s_char = 0;
 				uart_poll_out(uart_dev, 'F');
 				for(i = 32 * j; i < 32*(j+1); i++){
@@ -423,13 +431,15 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				}
 			}
 			
-			k_msleep(100);
+			k_msleep(1000);
 		}
 		#endif
 	}
 	else{
 
-
+	#if FREE_RUN
+	}
+	#else
 	int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	/* Timing Parameters */
@@ -443,9 +453,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		for(j = 0; j < N_Averages; j++){
 
 			/* Read Data from ADC */
-			ad4002_continuous_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
-			k_msleep(SLEEP_TIME_MS);
-			ad4002_stop_read(ad4002_master);
+			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
 			//t2 = k_uptime_get();
 			/* Copy data to safe memory location */ 
@@ -532,10 +541,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		activeState = IDLE;
 		return;
 	}
-	}
 	activeState = IDLE;
 	printk("X\n");
 	return; 
+	}
+#endif
 }
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
@@ -579,4 +589,10 @@ static float adc_mv_to_temperature(int32_t val_mv){
 	float m_temp = 0;
 	float b_temp = 0;
 	return (float)(val_mv * m_temp + b_temp); 
+}
+
+/* Wake up sleeping main thread following full dma transfer to resume normal processing */
+static void dma_tcie_callback(){
+
+	k_wakeup(ia_tid);
 }
