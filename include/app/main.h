@@ -26,7 +26,8 @@
 #define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
 /* Measurement params */
-#define SAMPLES_PER_COLLECTION  	2048
+#define SAMPLES_PER_COLLECTION  	1050
+#define N_FFT						1024
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10

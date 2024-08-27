@@ -142,7 +142,7 @@ static int analog_ad4002_init_read(const struct device *dev_master, const struct
 	LL_TIM_OC_SetCompareCH1(pwm_cfg->timer, CNV_HIGH_TIME); // For CNV Timer, heads up is already set earlier
 	LL_TIM_EnableARRPreload(pwm_cfg->timer);
 	LL_TIM_OC_EnablePreload(pwm_cfg->timer, ll_channel);
-	LL_TIM_SetAutoReload(pwm_cfg->timer, cfg->sample_period);
+	LL_TIM_SetAutoReload(pwm_cfg->timer, cfg->sample_period-1);
 
 	return 0;
 	
@@ -314,10 +314,10 @@ void dma_irq_tcie(const struct device *dev)
 
 	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
 	//LL_TIM_OC_SetMode(pwm_cfg->timer, ll_channel, LL_TIM_OCMODE_FORCED_INACTIVE);
-	LL_TIM_CC_DisableChannel(pwm_cfg->timer, (ll_channel|LL_TIM_CHANNEL_CH2));
+	//LL_TIM_CC_DisableChannel(pwm_cfg->timer, (ll_channel|LL_TIM_CHANNEL_CH2));
 	// Set GPIO pin to Output (Ch1 PA8)
 	GPIO_TypeDef *pa = GPIOA;
-	MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_1, GPIO_MODER_MODE8_0);
+	//MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_1, GPIO_MODER_MODE8_0);
 
 	/* Clear Flags */
 	uint32_t* SPI_DMA_1_IFCR = DMA1_BASE + 0x04;

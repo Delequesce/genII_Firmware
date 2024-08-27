@@ -206,6 +206,9 @@ static void uartIOThread_entry_point(){
 					if (stopTest() < 0){
 						break;
 					}
+					if (activeState == TESTRUNNING){
+						uart_poll_out(uart_dev, 'X');
+					}
 					activeState = IDLE; 
 					k_thread_abort(ia_tid);
 					break;
@@ -426,9 +429,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				}
 				uart_poll_out(uart_dev, '\n');
 				/* Wait for response from UI before sending more data */
-				while (s_char != 'K'){
+				/*while (s_char != 'K'){
 					uart_poll_in(uart_dev, &s_char);
-				}
+				}*/
 			}
 			
 			k_msleep(1000);
@@ -450,6 +453,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
 		//t1 = k_uptime_get();
+		ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+		k_msleep(2); // Thread sleeps until DMA callback is triggered
+
 		for(j = 0; j < N_Averages; j++){
 
 			/* Read Data from ADC */
@@ -469,7 +475,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			
 			/* Run algorithm */
 			//t3 = k_uptime_get();
-			for(n = 0; n < SAMPLES_PER_COLLECTION; n++){
+			for(n = SAMPLES_PER_COLLECTION-N_FFT; n < SAMPLES_PER_COLLECTION; n++){
 				current_value_Ve = Ve_data_safe[n] + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
 				prev_prev_value_Ve = prev_value_Ve;
 				prev_value_Ve = current_value_Ve; 
@@ -480,11 +486,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			}
 			//t4 = k_uptime_get();
 			/* Final Step calculates complex FFT bin for each signal */
-			Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/SAMPLES_PER_COLLECTION/65535.0f;
-			Ve_imag = 3*(sin_w0 * prev_value_Ve)/SAMPLES_PER_COLLECTION/65535.0f;
+			Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/N_FFT/65535.0f;
+			Ve_imag = 3*(sin_w0 * prev_value_Ve)/N_FFT/65535.0f;
 
-			Vr_real = 3*(cos_w0 * prev_value_Vr - prev_prev_value_Vr)/SAMPLES_PER_COLLECTION/65535.0f;
-			Vr_imag = 3*(sin_w0 * prev_value_Vr)/SAMPLES_PER_COLLECTION/65535.0f;
+			Vr_real = 3*(cos_w0 * prev_value_Vr - prev_prev_value_Vr)/N_FFT/65535.0f;
+			Vr_imag = 3*(sin_w0 * prev_value_Vr)/N_FFT/65535.0f;
 
 			/* Finally, compute Z, G, and C */
 			Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
@@ -498,7 +504,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			Z_real_mean = (Z_real_mean * i + Z_real)/(i+1);
 			Z_imag_mean = (Z_imag_mean * i + Z_imag)/(i+1);
 			printk("EZ_real: %0.4f\n", Z_real_mean);
-			printk("EZ_real: %0.4f\n", Z_imag_mean);
+			printk("EZ_imag: %0.4f\n", Z_imag_mean);
 		}
 		else{
 			/* Final Calculation */
@@ -551,29 +557,22 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
 static void uart_write_32f(float* data, uint8_t numData, char messageCode){
 	
-	char buffer1[9];
-	char buffer2[9];
+	char buffer[9];
 
-	uint8_t n1, n2 = 0;
-	if (numData == 1){
-		n1 = sprintf(buffer1, "%c%f\n", messageCode, *data);
-		for(int i = 0; i < n1; i++){
-			uart_poll_out(uart_dev, buffer1[i]);
-		}
-	}
-	else if (numData == 2){
-		float data_float = *data; 
-		n1 = sprintf(buffer1, "%c%0.4f", messageCode, data_float);
-		*data++;
-		data_float = *data;
-		n2 = sprintf(buffer2, "%0.4f\n", data_float);
+	uint8_t n, i, k = 0;
 
-		for(int i = 0; i < n1; i++){
-			uart_poll_out(uart_dev, buffer1[i]);
+	uart_poll_out(uart_dev, messageCode);
+	for (i = 0; i < numData; i++){
+		n = snprintf(buffer, 9, "%f", *data);
+		for(k = 0; k < n-1; k++){
+			uart_poll_out(uart_dev, buffer[k]);
 		}
-		uart_poll_out(uart_dev, '!');
-		for(int i = 0; i < n2; i++){
-			uart_poll_out(uart_dev, buffer2[i]);
+		data++;
+		if (i+1 < numData){
+			uart_poll_out(uart_dev, '!');
+		}
+		else{
+			uart_poll_out(uart_dev, 0xA);
 		}
 	}
 	return;
