@@ -511,7 +511,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	int64_t startTime = k_uptime_get();
 
 	/* This loop runs each collection for the entire test run time (outer loop) */
-	for(i = 0; i < 30; i++){
+	for(i = 0; i < N_Measurements; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
 		//t1 = k_uptime_get();
