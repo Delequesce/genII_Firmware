@@ -25,6 +25,9 @@
 #define HEATER_STACK_SIZE			1024
 #define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
+/* UART */
+#define MSG_SIZE 9
+
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
@@ -32,6 +35,7 @@
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
 #define DEFAULT_RUN_TIME			1800
+#define DEFAULT_INCUBATION_TEMP		37
 #define DEFAULT_SPOT_FREQUENCY		1000000
 #define CONVERT_FREQUENCY			1032258
 #define W0							0.19634916
@@ -50,6 +54,7 @@
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
 #define K_P							8
 #define K_I							0.1
+
 
 /* Helper Macros */
 #define COMPLEX_DIVIDE_REAL(r1, i1, r2, i2) (r1*r2 + i1*i2)/(r2*r2 + i2*i2)
@@ -76,7 +81,8 @@ enum heaterStates {
 
 struct test_config{
 	uint16_t runTime; // Test run time in seconds
-	uint16_t collectionInterval; // Interval in seconds between measurements
+	uint8_t collectionInterval; // Interval in seconds between measurements
+	uint8_t incubationTemp; // Incubation Temperature 
 };
 
 struct calibration_data{

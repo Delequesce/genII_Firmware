@@ -28,6 +28,7 @@ enum heaterStates heaterState = NOT_HEATING;
 static struct test_config test_cfg = {
 	.runTime = DEFAULT_RUN_TIME,
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+	.incubationTemp = DEFAULT_INCUBATION_TEMP,
 };
 
 /* Load with default values */
@@ -50,6 +51,10 @@ K_THREAD_DEFINE(ia, IA_STACK_SIZE, testThread_entry_point, &test_cfg, NULL, NULL
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 #endif
+
+/* Message and work queue */
+K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 4, 1); // Message queue can handle 10 items of size MSG_SIZE (bytes), aligned to 1 byte boundary. 
+
 /* Relevant Device Tree Structures */
 const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 static const struct device *flash_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
@@ -73,13 +78,53 @@ static const struct adc_dt_spec adc_channels[] = {
 			     DT_SPEC_AND_COMMA)
 };
 
+/* UART ISR params */
+static char rx_buf[MSG_SIZE];
+static int rx_buf_pos = 0;
 
 //static const struct adc_dt_spec adc_channels[] = {ADC_DT_SPEC_GET_BY_NAME(DT_PATH(zephyr_user), vth2)};
+
+
+/* ISR strictly needs to read data from FIFO and store into queue for message handler workthread */
+void uart_rx_isr(const struct device *dev, void *user_data){
+	
+	uint8_t c;
+	int ret;
+	/* ACK pending requests */
+	if (!uart_irq_update(uart_dev)) {
+		return;
+	}
+
+	/* Check if uart rx buffer has received a character */
+	ret = uart_irq_rx_ready(uart_dev);
+	if (!ret) {
+		return;
+	}
+
+	/* Read until FIFO is empty */
+	while (uart_fifo_read(uart_dev, &c, 1) == 1) {
+		if ((c == '\n' || c == '\r') && rx_buf_pos > 0) {
+			/* terminate string */
+			rx_buf[rx_buf_pos] = '\0';
+
+			/* if queue is full, message is silently dropped */
+			k_msgq_put(&uart_msgq, &rx_buf, K_NO_WAIT);
+
+			/* reset the buffer (it was copied to the msgq) */
+			rx_buf_pos = 0;
+		} else if (rx_buf_pos < (sizeof(rx_buf) - 1)) {
+			rx_buf[rx_buf_pos++] = c;
+		}
+		/* else: characters beyond buffer size are dropped */
+	}
+
+}
 
 
 /* Sets up devices */
 int main(){
 
+	int ret;
 	/* Check Device Readiness */
 	if (!device_is_ready(uart_dev)){
 		printk("Uart not ready\n");
@@ -87,7 +132,8 @@ int main(){
 	}
 
 	/* Configure Device Params */
-	if (configure_uart_device(uart_dev) < 0){
+	ret = configure_uart_device(uart_dev);
+	if (ret < 0){
 		printk("Uart failed to initialize\n");
 		return -1;
 	}
@@ -128,90 +174,107 @@ static int configure_uart_device(const struct device *dev){
 		.flow_ctrl = UART_CFG_FLOW_CTRL_NONE,
 	};
 
+	
+
 	if (uart_configure(dev, &cfg) < 0){
 		return -1;
 	}
+	
+	/* Set ISR and enable interrupts */
+	int ret = uart_irq_callback_user_data_set(uart_dev, uart_rx_isr, NULL);
+	if (ret < 0) {
+		if (ret == -ENOTSUP) {
+			printk("Interrupt-driven UART API support not enabled\n");
+		} else if (ret == -ENOSYS) {
+			printk("UART device does not support interrupt-driven API\n");
+		} else {
+			printk("Error setting UART callback: %d\n", ret);
+		}
+		return 0;
+	}
+
+	uart_irq_rx_enable(uart_dev);
+	
 	return 0;
+
+
 }
 
 /* Polling based UART handler thread */
-#if FREE_RUN
-#else
 static void uartIOThread_entry_point(){
-	unsigned char p_char;
-	int ret;
+
 	while(1){
-		// Polls uart interface 10 times per second for any incoming data
-		while (uart_poll_in(uart_dev, &p_char) < 0){
-			/* Allow other threads to work */
-			//printk("Waiting for input...\n");
-			k_msleep(100);
-		}
-		/* Decides which subroutine to execute based on sent command. Spawns and cancels appropriate threads */
-		switch(p_char) {
-			if (activeState == IDLE){
-				case 'C': // Connect to Device
-					uart_poll_out(uart_dev, 'K');
-					deviceConnected = true;
-					break;
-				case 'S': // Read and alter Test Configuration Structure
-					volatile uint8_t* p_u8;
-					uart_poll_in(uart_dev, p_u8);
-					test_cfg.runTime = *p_u8;
-					uart_poll_in(uart_dev, p_u8);
-					test_cfg.collectionInterval = *p_u8;
-					break;
-				case 'N': // New Test
-					activeState = TESTRUNNING;
-					/* Allocate memory and spawn new thread */
-					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-									K_THREAD_STACK_SIZEOF(IA_stack_area),
-									testThread_entry_point, 
-									&test_cfg, NULL, NULL, 
-									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-					break;
-				case 'H': // Toggle Heater
-					/* Toggle global parameter for heater thread to observe */
-					heaterState = (heaterState + 1) % 2;
-					heater_errI = 0; // Reset Integral counter
-					break;
-				case 'B': // Calibrate System
-					activeState = CALIBRATING;
-					struct test_config calib_cfg = {
-						.runTime = DEFAULT_CALIBRATION_TIME,
-						.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
-					};
-					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-									K_THREAD_STACK_SIZEOF(IA_stack_area),
-									testThread_entry_point, 
-									&calib_cfg, NULL, NULL, 
-									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-					break;
-				case 'Q': // Run EQC
-					activeState = EQC;
-					//runEQC();
-					break;
-				case 'F': // Free Run
-					activeState = FREERUNNING;
-					/* Allocate memory and spawn new thread */
-					ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-									K_THREAD_STACK_SIZEOF(IA_stack_area),
-									testThread_entry_point, 
-									&test_cfg, NULL, NULL, 
-									IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-					break;
-			}
-			else{
-				case 'X': // Stop Test
-					if (stopTest() < 0){
+		/* Check messagequeue */
+		while (k_msgq_num_used_get(&uart_msgq)) {
+			unsigned char p_char[MSG_SIZE]; 
+        	k_msgq_get(&uart_msgq, &p_char, K_NO_WAIT);
+
+			/* Decides how to process data based on control character */
+			switch(p_char[0]) {
+				if (activeState == IDLE){
+					case 'C': // Connect to Device
+						uart_poll_out(uart_dev, 'K');
+						deviceConnected = true;
 						break;
-					}
-					if (activeState == TESTRUNNING){
-						uart_poll_out(uart_dev, 'X');
-					}
-					activeState = IDLE; 
-					k_thread_abort(ia_tid);
-					break;
+					case 'S': // Alter Test Configuration Structure, convert from ascii encoding
+						test_cfg.runTime = 1000 * p_char[1] + 100 * p_char[2] + 10 * p_char[3] + p_char[4] - 53328;
+						test_cfg.collectionInterval = p_char[5]-48;
+						test_cfg.incubationTemp = 10 * p_char[6] + p_char[7] - 528;
+						// Respond positively
+						uart_poll_out(uart_dev, 'K');
+						break;
+					case 'N': // New Test
+						activeState = TESTRUNNING;
+						/* Allocate memory and spawn new thread */
+						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+										K_THREAD_STACK_SIZEOF(IA_stack_area),
+										testThread_entry_point, 
+										&test_cfg, NULL, NULL, 
+										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+						break;
+					case 'H': // Toggle Heater
+						/* Toggle global parameter for heater thread to observe */
+						heaterState = (heaterState + 1) % 2;
+						heater_errI = 0; // Reset Integral counter
+						break;
+					case 'B': // Calibrate System
+						activeState = CALIBRATING;
+						struct test_config calib_cfg = {
+							.runTime = DEFAULT_CALIBRATION_TIME,
+							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+						};
+						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+										K_THREAD_STACK_SIZEOF(IA_stack_area),
+										testThread_entry_point, 
+										&calib_cfg, NULL, NULL, 
+										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+						break;
+					case 'Q': // Run EQC
+						activeState = EQC;
+						//runEQC();
+						break;
+					case 'F': // Free Run
+						activeState = FREERUNNING;
+						/* Allocate memory and spawn new thread */
+						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+										K_THREAD_STACK_SIZEOF(IA_stack_area),
+										testThread_entry_point, 
+										&test_cfg, NULL, NULL, 
+										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+						break;
+				}
+				else{
+					case 'X': // Stop Test
+						if (stopTest() < 0){
+							break;
+						}
+						if (activeState == TESTRUNNING){
+							uart_poll_out(uart_dev, 'X');
+						}
+						activeState = IDLE; 
+						k_thread_abort(ia_tid);
+						break;
+				}
 			}
 		}
 		/* Yield to newly spawned thread or to heater thread */
@@ -219,7 +282,6 @@ static void uartIOThread_entry_point(){
 	}
 	return;
 }
-#endif
 
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3){
 
