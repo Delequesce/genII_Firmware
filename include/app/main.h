@@ -3,7 +3,7 @@
 
 /* Configuration flags */
 #define FREE_RUN					0
-#define HEATER						0
+#define HEATER						1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -39,8 +39,14 @@
 #define DEFAULT_SPOT_FREQUENCY		1000000
 #define CONVERT_FREQUENCY			1032258
 #define W0							0.19634916
-#define DEFAULT_ZFB_REAL			1//49.76
-#define DEFAULT_ZFB_IMAG			0//-3.4
+#define DEFAULT_ZFB_REAL			1
+#define DEFAULT_ZFB_IMAG			0
+#define Z_OFF_REAL					0
+#define Z_OFF_IMAG					0
+#define ADC_RESOLUTION				16
+#define BITS_USED					16
+#define RESOLUTION_MASK				0xFFFF << (ADC_RESOLUTION - BITS_USED) // 0xFFFF is 16 bits, 0xFFFC is 14
+#define MAX_N_MEASUREMENTS			0x800 // (0x1000 = 4096)
 
 /* Other constants */
 #define PI						 	3.141592654
@@ -50,10 +56,10 @@
 #define PAGE200						0x0C8200
 #define UART_LSB_FIRST				0
 #define UART_MSB_FIRST				1
-#define NUM_THERMISTORS				4
+#define NUM_THERMISTORS				2
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define K_P							8
-#define K_I							0.1
+#define K_P							9 // 8
+#define K_I							0.15 // 0.1
 
 
 /* Helper Macros */
@@ -83,6 +89,7 @@ struct test_config{
 	uint16_t runTime; // Test run time in seconds
 	uint8_t collectionInterval; // Interval in seconds between measurements
 	uint8_t incubationTemp; // Incubation Temperature 
+	bool channelOn[4]; // Boolean array indicating which channels are active
 };
 
 struct calibration_data{
@@ -95,6 +102,7 @@ struct impedance_data{
 	float G;
 };
 
+
 /* Other global Variables */
 static float heater_errI;
 static bool deviceConnected = false;
@@ -106,7 +114,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3);
 static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
-static float adc_mv_to_temperature(int32_t val_mv);
+static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
 
 

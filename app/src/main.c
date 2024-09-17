@@ -29,14 +29,29 @@ static struct test_config test_cfg = {
 	.runTime = DEFAULT_RUN_TIME,
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
+	.channelOn = {1, 0, 1, 0},
 };
 
 /* Load with default values */
-static struct calibration_data calib = {
-	.Zfb_real = DEFAULT_ZFB_REAL,
-	.Zfb_imag = DEFAULT_ZFB_IMAG,
+static struct calibration_data calibMat[4] = {
+	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
+	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
+	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
+	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
 };
 
+/** Channel to TIA Select mappings (will need to fix after switching to active high decoder) */
+static const uint32_t d0_state[4] = {
+	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+};
+static const uint32_t d1_state[4] = {
+	GPIO_OUTPUT_ACTIVE, GPIO_OUTPUT_INACTIVE,
+	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+};
+
+/* Main data structure */
+static struct impedance_data testDataMat[MAX_N_MEASUREMENTS][4] = {{0}};
 
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
@@ -220,6 +235,7 @@ static void uartIOThread_entry_point(){
 						test_cfg.runTime = 1000 * p_char[1] + 100 * p_char[2] + 10 * p_char[3] + p_char[4] - 53328;
 						test_cfg.collectionInterval = p_char[5]-48;
 						test_cfg.incubationTemp = 10 * p_char[6] + p_char[7] - 528;
+						//test_cfg.channels
 						// Respond positively
 						uart_poll_out(uart_dev, 'K');
 						break;
@@ -236,12 +252,17 @@ static void uartIOThread_entry_point(){
 						/* Toggle global parameter for heater thread to observe */
 						heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
+						if (heaterState == NOT_HEATING){
+							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
+						}
 						break;
 					case 'B': // Calibrate System
 						activeState = CALIBRATING;
 						struct test_config calib_cfg = {
 							.runTime = DEFAULT_CALIBRATION_TIME,
 							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+							.incubationTemp = 0,
+							.channelOn = {1, 0, 1, 0},
 						};
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
@@ -295,6 +316,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		return 0;
 	}
 
+	/* Ensure Channel is held low until heating begins */
+	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
+
 	/* Configure */
 	uint32_t count = 0;
 	uint32_t pulse_cycles = 0;
@@ -320,50 +344,54 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			return -1;
 		}
 	}
-	int32_t val_mv;
 	float heater_errP;
-	float channel_temps[NUM_THERMISTORS];
+	int err;
+	float tempAvg, CCTemp, prevTempAvg, prevCCTemp;
+
+	/* Initial Read */
+	tempAvg = readTemp(&sequence);
+	CCTemp = tempAvg;
+	prevTempAvg = tempAvg;
+	prevCCTemp = tempAvg;
 
 	while(1){
 
-		/* Read current temperature values from ADC */
-		for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
-			if (adc_sequence_init_dt(&adc_channels[i], &sequence) < 0) {
-				//LOG_ERR("Could not initalize sequnce");
-				return 0;
-			}
-			adc_read_dt(&adc_channels[i], &sequence);
-			val_mv = (int32_t)buf;
-			adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
-			channel_temps[i] = adc_mv_to_temperature(val_mv);
-			//printk("Channel %d reading: %d\n", i, val_mv[i]);
-		}
-		/* Make sure no outliers and find average */
-		float tempAvg = channel_temps[0]; 
-		for (size_t i = 1U; i < NUM_THERMISTORS; i++){
-			tempAvg = (channel_temps[i] + tempAvg * i)/(i+1);
-		}
-		for (size_t i = 0U; i < NUM_THERMISTORS; i++){
-			if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
-				printk("ETemperatures on board are spatially uneven\n");
-			}
-		}
+		tempAvg = readTemp(&sequence);
+
+		/* Update estimate of ClotChip Temperature based on rate of change */
+		CCTemp = (tempAvg-prevTempAvg)*0.33f + prevCCTemp; 
+
+		// for (size_t i = 0U; i < NUM_THERMISTORS; i++){
+		// 	if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
+		// 		printk("ETemperatures on board are spatially uneven\n");
+		// 	}
+		// }
 		/* Send temperature reading to GUI */
 		if(deviceConnected){
-			uart_write_32f(&tempAvg, 1, 'T');
+			uart_write_32f(&CCTemp, 1, 'T');
 		}
 
 		// To Do...
 		if(heaterState == HEATING){
 			
 			/* Find proportinal and integral error */
-			heater_errP = 37.0-tempAvg;
+			heater_errP = 37.0-CCTemp;
 			heater_errI = heater_errI + heater_errP;
 			
-			pulse_cycles = (uint32_t)(K_P * heater_errP + K_I * heater_errI);
+			pulse_cycles = (uint32_t)(V_SIG_PERIOD * (K_P * heater_errP + K_I * heater_errI)/100.0);
+			pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
+			pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+
+			char int_buffer[9];
+			sprintf(int_buffer, "%lu", pulse_cycles);
+
+			// Optional Print Pulse Cycles
+			for(int k = 0; k < 2; k++){
+				uart_poll_out(uart_dev, int_buffer[k]);
+			}
 
 			// Update duty cycle using zephyr driver
-			pulse_cycles = 32;
+			//pulse_cycles = 32;
 			
 			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
 				printk("Error: Failed to set heater pulse");
@@ -390,7 +418,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	 * If test is for calibration, use default values for easy calibration. 
 	*/
 	if (activeState == TESTRUNNING){
-		flash_read(flash_device, PAGE200, &calib, 8);
+		flash_read(flash_device, PAGE200, &calibMat, 32);
 	}
 
 	/* Data Buffer Initialization */
@@ -416,7 +444,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Begin Measurement */
 	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
 	uint16_t N_Averages = 100;
-	uint16_t i, j;
+	uint16_t i, j, c;
 	uint16_t n;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
 	const float cos_w0 = cosf(w0);
@@ -424,21 +452,17 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float mag2Vr, mag2Ve, mag2Z, Z_temp_real, Z_temp_imag;
 	float Vr_real, Vr_imag, Ve_real, Ve_imag;
 	float Z_real, Z_imag = 0;
-	float Z_real_mean, Z_imag_mean = 0;
+	float Z_real_mean[4] = {0, 0, 0, 0};
+	float Z_imag_mean[4] = {0, 0, 0, 0};
 	float prev_value_Vr, prev_value_Ve;
 	float prev_prev_value_Vr, prev_prev_value_Ve;
 	float current_value_Vr, current_value_Ve;
-	struct impedance_data impDat = {.C = 0, .G = 0};
+	//struct impedance_data impDat = {.C = 0, .G = 0};
 
 	unsigned char a_char;
 
 	/* Configure TIA SHDN */
     if (!gpio_is_ready_dt(&d0) || !gpio_is_ready_dt(&d1)) {
-        printk("TIA Not Selected");
-		return 0;
-	}
-	/* Channel 0 */
-    if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("TIA Not Selected");
 		return 0;
 	}
@@ -452,6 +476,12 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		while(1){
 			
 			/* Within loop, start read, wait for interrupt, then processing */
+			/* Set Active Channel to Channel 0 */
+			if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_ACTIVE) < 0) {
+				printk("TIA Not Selected");
+				return 0;
+			}
+
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(SLEEP_TIME_MS); // Thread sleeps until DMA callback is triggered
 			// Processing Code
@@ -509,78 +539,104 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
-
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
 		//t1 = k_uptime_get();
-		ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
-		k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-		for(j = 0; j < N_Averages; j++){
+		/* Run Loop for Each Channel */
+		for(c = 0; c < 4; c++){
+			
+			/* If channel is not active, skip collection */
+			if(!test_cfg->channelOn[c]){
+				continue;
+			}
 
-			/* Read Data from ADC */
+			/* Set Active Channel */
+			if (gpio_pin_configure_dt(&d0, d0_state[c]) < 0 || gpio_pin_configure_dt(&d1, d1_state[c]) < 0) {
+				printk("TIA Not Selected");
+				return 0;
+			}
+
+			/* Perform Initial Read */
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-			//t2 = k_uptime_get();
-			/* Copy data to safe memory location */ 
-			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+			for(j = 0; j < N_Averages; j++){
 
-			/* Goertzl Algorithm Params */
-			prev_value_Vr = 0;
-			prev_prev_value_Vr = 0;
-			prev_value_Ve = 0;
-			prev_prev_value_Ve = 0;
-			
-			/* Run algorithm */
-			//t3 = k_uptime_get();
-			for(n = SAMPLES_PER_COLLECTION-N_FFT; n < SAMPLES_PER_COLLECTION; n++){
-				current_value_Ve = Ve_data_safe[n] + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
-				prev_prev_value_Ve = prev_value_Ve;
-				prev_value_Ve = current_value_Ve; 
+				/* Read Data from ADC */
+				ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+				k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-				current_value_Vr = Vr_data_safe[n] + 2 * cos_w0 * prev_value_Vr - prev_prev_value_Vr;
-				prev_prev_value_Vr = prev_value_Vr;
-				prev_value_Vr = current_value_Vr; 
+				//t2 = k_uptime_get();
+				/* Copy data to safe memory location */ 
+				memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+				memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+
+				/* Goertzl Algorithm Params */
+				prev_value_Vr = 0;
+				prev_prev_value_Vr = 0;
+				prev_value_Ve = 0;
+				prev_prev_value_Ve = 0;
+
+				/* Run Goertzl algorithm to get 1 MHz FFT bin */
+				//t3 = k_uptime_get();
+				for(n = SAMPLES_PER_COLLECTION-N_FFT; n < SAMPLES_PER_COLLECTION; n++){
+					current_value_Ve = (Ve_data_safe[n] & RESOLUTION_MASK) + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
+					prev_prev_value_Ve = prev_value_Ve;
+					prev_value_Ve = current_value_Ve; 
+
+					current_value_Vr = (Vr_data_safe[n] & RESOLUTION_MASK) + 2 * cos_w0 * prev_value_Vr - prev_prev_value_Vr;
+					prev_prev_value_Vr = prev_value_Vr;
+					prev_value_Vr = current_value_Vr; 
+				}
+				//t4 = k_uptime_get();
+				/* Final Step calculates complex FFT bin for each signal */
+				Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/N_FFT/65535.0f;
+				Ve_imag = 3*(sin_w0 * prev_value_Ve)/N_FFT/65535.0f;
+
+				Vr_real = 3*(cos_w0 * prev_value_Vr - prev_prev_value_Vr)/N_FFT/65535.0f;
+				Vr_imag = 3*(sin_w0 * prev_value_Vr)/N_FFT/65535.0f;
+
+				/* Finally, compute Z */
+				Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
+				Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
+				Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1); // Moving Average
+				Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1);
+
 			}
-			//t4 = k_uptime_get();
-			/* Final Step calculates complex FFT bin for each signal */
-			Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/N_FFT/65535.0f;
-			Ve_imag = 3*(sin_w0 * prev_value_Ve)/N_FFT/65535.0f;
+		
+			/* Apply small real and imaginary Z Offsets */
+			Z_real += Z_OFF_REAL;
+			Z_imag += Z_OFF_IMAG;
 
-			Vr_real = 3*(cos_w0 * prev_value_Vr - prev_prev_value_Vr)/N_FFT/65535.0f;
-			Vr_imag = 3*(sin_w0 * prev_value_Vr)/N_FFT/65535.0f;
-
-			/* Finally, compute Z, G, and C */
-			Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
-			Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
-			Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1); // Moving Average
-			Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calib.Zfb_real, calib.Zfb_imag))/(j+1);
-
+			/* Update calibration moving average */
+			if (activeState == CALIBRATING){
+				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
+				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
+				//printk("EZ_real: %0.4f\n", Z_real_mean);
+				//printk("EZ_imag: %0.4f\n", Z_imag_mean);
+			}
+			else{
+				/* Final Calculation and storage */
+				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
+				testDataMat[i][c].G = 1000 * Z_real/mag2Z;				// Result is in mS
+				testDataMat[i][c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+			}
 		}
-		/* Update calibration moving average */
-		if (activeState == CALIBRATING){
-			Z_real_mean = (Z_real_mean * i + Z_real)/(i+1);
-			Z_imag_mean = (Z_imag_mean * i + Z_imag)/(i+1);
-			printk("EZ_real: %0.4f\n", Z_real_mean);
-			printk("EZ_imag: %0.4f\n", Z_imag_mean);
+
+		/* Send data over uart */
+		if (activeState != CALIBRATING){
+			uart_write_32f(&testDataMat[i][0], 8, 'D');
+		//printk("E%lli\n", timeStamp);
 		}
 		else{
-			/* Final Calculation */
-			mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-			impDat.G = 1000 * Z_real/mag2Z;				// Result is in mS
-			impDat.C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-
-			/* Collection timestamp */
-			timeStamp = k_uptime_get();
-
-			/* Send data over uart */
-			uart_write_32f(&impDat, 2, 'D');
-			//printk("E%lli\n", timeStamp);
+			printk("ECalibrating\n");
 		}
+
+		/* Collection timestamp */
+		timeStamp = k_uptime_get();
 
 		/* Sleep until next collection period */
 		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp+startTime;
@@ -592,23 +648,34 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	/* Perform additional calibration steps, if necessary */
 	if(activeState == CALIBRATING){
-		const float test_Z_real = 180.0;
-		const float test_Z_imag = 0.0;
+		const float test_Z_real = 179.636;
+		const float test_Z_imag = 0.043;
 
-		calib.Zfb_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
-		calib.Zfb_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean, Z_imag_mean);
+		for(c=0; c<4; c++){
+			if (test_cfg->channelOn[c]){
+				calibMat[c].Zfb_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
+				calibMat[c].Zfb_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
+			}
+		}
 
 		/* Send new values over uart*/
-		uart_write_32f(&calib, 2, 'C');
+		//uart_write_32f(&calib, 2, 'C');
 
 		/* Write to flash memory */
 		//flash_write_protection_set(flash_device, false);
-		flash_erase(flash_device, PAGE200, 8);
-		flash_write(flash_device, PAGE200, &calib, 8);
+		flash_erase(flash_device, PAGE200, 32);
+		flash_write(flash_device, PAGE200, &calibMat, 32);
+		printk("ECalibration Values Written to Memory\n");
 		//flash_write_protection_set(flash_device, true);
 		activeState = IDLE;
 		return;
 	}
+	else{
+		/* Store Test Data in Flash */
+		// To Do...
+
+	}
+
 	activeState = IDLE;
 	printk("X\n");
 	return; 
@@ -626,6 +693,8 @@ static void uart_write_32f(float* data, uint8_t numData, char messageCode){
 	uart_poll_out(uart_dev, messageCode);
 	for (i = 0; i < numData; i++){
 		n = snprintf(buffer, 9, "%f", *data);
+		n = (n > 9) ? 9: n;
+	
 		for(k = 0; k < n-1; k++){
 			uart_poll_out(uart_dev, buffer[k]);
 		}
@@ -646,11 +715,46 @@ static int stopTest(){
 	return 0; 
 }
 
-static float adc_mv_to_temperature(int32_t val_mv){
-	float m_temp = 0;
-	float b_temp = 0;
-	return (float)(val_mv * m_temp + b_temp); 
+/* Read current temperature values from ADC */
+static float readTemp(struct adc_sequence* sequence){
+	int err;
+	int16_t* val_mv_ptr;
+	int32_t val_mv;
+	float m_temp = 0.0331;
+	float b_temp = -22.7;
+	float channel_temps_local[NUM_THERMISTORS];
+	channel_temps_local[0] = 0;
+	float tempAvg;
+	for (size_t i = 0U; i < NUM_THERMISTORS; i++) {
+
+		(void)adc_sequence_init_dt(&adc_channels[i], sequence);
+
+		err = adc_read_dt(&adc_channels[i], sequence);
+		if (err < 0) {
+			printk("Could not read (%d)\n", err);
+			continue;
+		}
+		
+		val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
+		val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b
+		err = adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
+		if (err < 0) {
+			printk("Value in mV not available\n");
+		}
+		else{
+			float tempValue = (val_mv) * m_temp + b_temp;
+			channel_temps_local[i] = tempValue;
+		}
+		
+		//printk("Channel %d reading: %d\n", i, val_mv[i]);
+	}
+	tempAvg = channel_temps_local[0]; 
+	for (size_t i = 1U; i < NUM_THERMISTORS; i++){
+		tempAvg = (channel_temps_local[i] + tempAvg * i)/(i+1);
+	}
+	return tempAvg;
 }
+
 
 /* Wake up sleeping main thread following full dma transfer to resume normal processing */
 static void dma_tcie_callback(){
