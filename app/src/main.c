@@ -346,7 +346,10 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	}
 	float heater_errP;
 	int err;
-	float tempAvg, CCTemp, prevTempAvg, prevCCTemp;
+	float tempAvg = 0;
+	float CCTemp = 0;
+	float prevTempAvg = 0;
+	float prevCCTemp = 0;
 
 	/* Initial Read */
 	tempAvg = readTemp(&sequence);
@@ -359,7 +362,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		tempAvg = readTemp(&sequence);
 
 		/* Update estimate of ClotChip Temperature based on rate of change */
-		CCTemp = (tempAvg-prevTempAvg)*0.33f + prevCCTemp; 
+		CCTemp = (tempAvg-prevTempAvg)*1.0f + prevCCTemp; 
+		prevCCTemp = CCTemp;
+		prevTempAvg = tempAvg;
 
 		// for (size_t i = 0U; i < NUM_THERMISTORS; i++){
 		// 	if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
@@ -376,20 +381,27 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			
 			/* Find proportinal and integral error */
 			heater_errP = 37.0-CCTemp;
-			heater_errI = heater_errI + heater_errP;
+
+			if(heater_errP < 0.5){
+				heater_errI = heater_errI + heater_errP;
 			
-			pulse_cycles = (uint32_t)(V_SIG_PERIOD * (K_P * heater_errP + K_I * heater_errI)/100.0);
-			pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
-			pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+				pulse_cycles = 20 + (uint32_t)(V_SIG_PERIOD * (K_P * heater_errP + K_I * heater_errI)/100.0);
+				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
+				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+			}
+			else{
+				pulse_cycles = V_SIG_PERIOD;
+			}
 
 			char int_buffer[9];
 			sprintf(int_buffer, "%lu", pulse_cycles);
 
 			// Optional Print Pulse Cycles
+			/*uart_poll_out(uart_dev, 'E');
 			for(int k = 0; k < 2; k++){
 				uart_poll_out(uart_dev, int_buffer[k]);
 			}
-
+			uart_poll_out(uart_dev, '\n');*/
 			// Update duty cycle using zephyr driver
 			//pulse_cycles = 32;
 			
@@ -659,7 +671,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		}
 
 		/* Send new values over uart*/
-		//uart_write_32f(&calib, 2, 'C');
+		uart_write_32f(&calibMat, 8, 'C');
 
 		/* Write to flash memory */
 		//flash_write_protection_set(flash_device, false);

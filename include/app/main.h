@@ -58,8 +58,8 @@
 #define UART_MSB_FIRST				1
 #define NUM_THERMISTORS				2
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define K_P							9 // 8
-#define K_I							0.15 // 0.1
+#define K_P							20 // 8
+#define K_I							0.10 // 0.1
 
 
 /* Helper Macros */
