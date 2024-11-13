@@ -29,7 +29,7 @@ static struct test_config test_cfg = {
 	.runTime = DEFAULT_RUN_TIME,
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
-	.channelOn = {1, 0, 1, 0},
+	.channelOn = {1, 1, 1, 1}, // Change to set default active channels
 };
 
 /* Load with default values */
@@ -40,15 +40,20 @@ static struct calibration_data calibMat[4] = {
 	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
 };
 
-/** Channel to TIA Select mappings (will need to fix after switching to active high decoder) */
-static const uint32_t d0_state[4] = {
+/* Channel to TIA Select mappings */
+static const uint32_t tia_shdn_states[7] = {
 	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_ACTIVE,
 	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+	GPIO_OUTPUT_INACTIVE,
 };
-static const uint32_t d1_state[4] = {
-	GPIO_OUTPUT_ACTIVE, GPIO_OUTPUT_INACTIVE,
-	GPIO_OUTPUT_INACTIVE, GPIO_OUTPUT_INACTIVE,
+
+/* Heater enable on-off states */
+static const uint32_t heaterEnable_states[2] = {
+		GPIO_OUTPUT_INACTIVE,
+		GPIO_OUTPUT_ACTIVE,
 };
+
 
 /* Main data structure */
 static struct impedance_data testDataMat[MAX_N_MEASUREMENTS][4] = {{0}};
@@ -74,13 +79,16 @@ K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 4, 1); // Message queue can handle 10 items o
 const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 static const struct device *flash_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
 static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
-static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
+//static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
 static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
 static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
-static const struct gpio_dt_spec cc_shdn_low = GPIO_DT_SPEC_GET(CC_SHDN_LOW, gpios);
 static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, gpios);
-static const struct gpio_dt_spec d0 = GPIO_DT_SPEC_GET(D0, gpios);
-static const struct gpio_dt_spec d1 = GPIO_DT_SPEC_GET(D1, gpios);
+//static const struct gpio_dt_spec d0 = GPIO_DT_SPEC_GET(D0, gpios);
+//static const struct gpio_dt_spec d1 = GPIO_DT_SPEC_GET(D1, gpios);
+static const struct gpio_dt_spec tia_1_shdn_low = GPIO_DT_SPEC_GET(TIA1_SHDN_LOW, gpios);
+static const struct gpio_dt_spec tia_2_shdn_low = GPIO_DT_SPEC_GET(TIA2_SHDN_LOW, gpios);
+static const struct gpio_dt_spec tia_3_shdn_low = GPIO_DT_SPEC_GET(TIA3_SHDN_LOW, gpios);
+static const struct gpio_dt_spec tia_4_shdn_low = GPIO_DT_SPEC_GET(TIA4_SHDN_LOW, gpios);
 static const struct gpio_dt_spec heater_en = GPIO_DT_SPEC_GET(HEATER_EN, gpios);
 
 #if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) || \
@@ -153,12 +161,12 @@ int main(){
 		return -1;
 	}
 
-	/* Setup Heater power, ADC Power and CC Drive Signal */
-    if (!gpio_is_ready_dt(&cc_shdn_low) || !gpio_is_ready_dt(&adc_shdn_low)) {
+	/* Turn off heater power and turn all amps and references on */
+    if (!gpio_is_ready_dt(&adc_shdn_low)) {
         printk("SHDN pins not ready");
 		return 0;
 	}
-    if (gpio_pin_configure_dt(&cc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
+    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("SHDN pins not properly configured");
 		return 0;
 	}
@@ -166,10 +174,27 @@ int main(){
         printk("Heater pins not ready");
 		return 0;
 	}
-	if (gpio_pin_configure_dt(&heater_en, GPIO_OUTPUT_ACTIVE) < 0) {
+	if (gpio_pin_configure_dt(&heater_en, GPIO_OUTPUT_INACTIVE) < 0) {
         printk("Heater pins not configured");
 		return 0;
 	}
+
+	/* Configure TIA SHDNs, setting all SHDN to start */
+    if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
+		!gpio_is_ready_dt(&tia_2_shdn_low) ||
+		!gpio_is_ready_dt(&tia_3_shdn_low) || 
+		!gpio_is_ready_dt(&tia_4_shdn_low)) {
+        printk("TIA SHDN Pins not ready");
+		return 0;
+	}
+
+	if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+				printk("TIA Multiplexing Error");
+				return 0;
+			}
 	
 	printk("Setup Completed\n");
 
@@ -252,9 +277,9 @@ static void uartIOThread_entry_point(){
 						/* Toggle global parameter for heater thread to observe */
 						heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
-						if (heaterState == NOT_HEATING){
+						/*if (heaterState == NOT_HEATING){
 							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
-						}
+						}*/
 						break;
 					case 'B': // Calibrate System
 						activeState = CALIBRATING;
@@ -262,7 +287,7 @@ static void uartIOThread_entry_point(){
 							.runTime = DEFAULT_CALIBRATION_TIME,
 							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 							.incubationTemp = 0,
-							.channelOn = {1, 0, 1, 0},
+							.channelOn = {1, 1, 1, 1},
 						};
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
@@ -312,12 +337,12 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	ARG_UNUSED(unused3);
 
 	/* Enable Heater power */
-	if (gpio_pin_set_dt(&heater_en, 1) < 0) {
+	/*if (gpio_pin_set_dt(&heater_en, 1) < 0) {
 		return 0;
-	}
+	}*/
 
 	/* Ensure Channel is held low until heating begins */
-	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
+	//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
 
 	/* Configure */
 	uint32_t count = 0;
@@ -350,6 +375,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	float CCTemp = 0;
 	float prevTempAvg = 0;
 	float prevCCTemp = 0;
+	bool heater_on_off = false; 
+
+	//static bool heatFlag = 0;
 
 	/* Initial Read */
 	tempAvg = readTemp(&sequence);
@@ -362,9 +390,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		tempAvg = readTemp(&sequence);
 
 		/* Update estimate of ClotChip Temperature based on rate of change */
-		CCTemp = (tempAvg-prevTempAvg)*1.0f + prevCCTemp; 
-		prevCCTemp = CCTemp;
-		prevTempAvg = tempAvg;
+		//CCTemp = (tempAvg-prevTempAvg)*1.0f + prevCCTemp; 
+		//prevCCTemp = CCTemp;
+		//prevTempAvg = tempAvg;
 
 		// for (size_t i = 0U; i < NUM_THERMISTORS; i++){
 		// 	if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
@@ -373,28 +401,40 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		// }
 		/* Send temperature reading to GUI */
 		if(deviceConnected){
-			uart_write_32f(&CCTemp, 1, 'T');
+			uart_write_32f(&tempAvg, 1, 'T');
 		}
 
 		// To Do...
 		if(heaterState == HEATING){
 			
 			/* Find proportinal and integral error */
-			heater_errP = 37.0-CCTemp;
+			//heater_errP = 37.0-tempAvg;
+			//heater_errI = heater_errI + heater_errP;
 
-			if(heater_errP < 0.5){
-				heater_errI = heater_errI + heater_errP;
+			// Determine heater on-off state based on error
+			heater_on_off = tempAvg < 37.0 ? true : false;
 			
-				pulse_cycles = 20 + (uint32_t)(V_SIG_PERIOD * (K_P * heater_errP + K_I * heater_errI)/100.0);
-				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
-				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+			if(gpio_pin_configure_dt(&heater_en, heaterEnable_states[heater_on_off]) < 0){
+				printk("Failure setting heater state\n");
+			}
+
+			/* if(heatFlag){
+				pulse_cycles = 25;
 			}
 			else{
-				pulse_cycles = V_SIG_PERIOD;
+				if(CCTemp > 40){
+					heatFlag = 1;
+					pulse_cycles = 25; 
+				}
+				else{
+					pulse_cycles = V_SIG_PERIOD;
+				}
 			}
+			pulse_cycles = V_SIG_PERIOD;
+			//heater_errP = 37.0-CCTemp;
 
 			char int_buffer[9];
-			sprintf(int_buffer, "%lu", pulse_cycles);
+			sprintf(int_buffer, "%lu", pulse_cycles); */
 
 			// Optional Print Pulse Cycles
 			/*uart_poll_out(uart_dev, 'E');
@@ -405,10 +445,11 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			// Update duty cycle using zephyr driver
 			//pulse_cycles = 32;
 			
-			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
+			// KEY CODE THAT SETS HEATER PWM. TURNED OFF TEMPORARILY FOR TESTING
+			/*if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
 				printk("Error: Failed to set heater pulse");
 				return -1;
-			}
+			}*/
 
 		}
 
@@ -444,7 +485,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
     } */
 
 	/* Enable ADC and CC Drive */
-	if (gpio_pin_set_dt(&cc_shdn_low, 1) < 0 || gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
+	if (gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
         printk("SHDN pins not properly set");
 		return 0;
 	}
@@ -473,9 +514,12 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	unsigned char a_char;
 
-	/* Configure TIA SHDN */
-    if (!gpio_is_ready_dt(&d0) || !gpio_is_ready_dt(&d1)) {
-        printk("TIA Not Selected");
+	/* Configure TIA SHDNs */
+    if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
+		!gpio_is_ready_dt(&tia_2_shdn_low) ||
+		!gpio_is_ready_dt(&tia_3_shdn_low) || 
+		!gpio_is_ready_dt(&tia_4_shdn_low)) {
+        printk("TIA SHDN Pins not ready");
 		return 0;
 	}
 
@@ -483,14 +527,18 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
 	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
 
+	//activeState = FREERUNNING; // Set to manually force freerunning test case
 	if(activeState == FREERUNNING){
 		int8_t N_chunks = SAMPLES_PER_COLLECTION/32;
 		while(1){
 			
 			/* Within loop, start read, wait for interrupt, then processing */
-			/* Set Active Channel to Channel 0 */
-			if (gpio_pin_configure_dt(&d0, GPIO_OUTPUT_INACTIVE) < 0 || gpio_pin_configure_dt(&d1, GPIO_OUTPUT_ACTIVE) < 0) {
-				printk("TIA Not Selected");
+			/* Set Active Channel to Channel 0 by setting all SHDNs but TIA 1 LOW */
+			if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+				printk("TIA Multiplexing Error");
 				return 0;
 			}
 
@@ -566,8 +614,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			}
 
 			/* Set Active Channel */
-			if (gpio_pin_configure_dt(&d0, d0_state[c]) < 0 || gpio_pin_configure_dt(&d1, d1_state[c]) < 0) {
-				printk("TIA Not Selected");
+            
+			/* Set Active Channel by setting shdn pins */
+			if (gpio_pin_configure_dt(&tia_1_shdn_low, tia_shdn_states[c+3]) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, tia_shdn_states[c+1]) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, tia_shdn_states[c]) < 0) {
+				printk("TIA Multiplexing Error");
 				return 0;
 			}
 
@@ -732,8 +785,8 @@ static float readTemp(struct adc_sequence* sequence){
 	int err;
 	int16_t* val_mv_ptr;
 	int32_t val_mv;
-	float m_temp = 0.0331;
-	float b_temp = -22.7;
+	float m_temp = 0.0349;
+	float b_temp = -13.4;
 	float channel_temps_local[NUM_THERMISTORS];
 	channel_temps_local[0] = 0;
 	float tempAvg;
@@ -764,7 +817,7 @@ static float readTemp(struct adc_sequence* sequence){
 	for (size_t i = 1U; i < NUM_THERMISTORS; i++){
 		tempAvg = (channel_temps_local[i] + tempAvg * i)/(i+1);
 	}
-	return tempAvg;
+	return tempAvg - 2;
 }
 
 

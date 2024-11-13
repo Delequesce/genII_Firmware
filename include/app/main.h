@@ -7,13 +7,17 @@
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
-#define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
+//#define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
 #define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
-#define CC_SHDN_LOW         		DT_ALIAS(my_cc_shdn_low)
 #define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
-#define D0							DT_ALIAS(my_d0)
-#define D1							DT_ALIAS(my_d1)
+//#define D0							DT_ALIAS(my_d0)
+//#define D1							DT_ALIAS(my_d1)
+#define TIA1_SHDN_LOW				DT_ALIAS(my_tia1_shdn_low)
+#define TIA2_SHDN_LOW				DT_ALIAS(my_tia2_shdn_low)
+#define TIA3_SHDN_LOW				DT_ALIAS(my_tia3_shdn_low)
+#define TIA4_SHDN_LOW				DT_ALIAS(my_tia4_shdn_low)
+
 #define HEATER_EN					DT_ALIAS(my_heater_en)
 
 /* Threading Params */

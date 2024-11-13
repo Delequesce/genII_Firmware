@@ -8,32 +8,36 @@
 			pwms = <&pwm2 2 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
 		};
 
-        heaterPwm: heaterPwm { 
+        /*heaterPwm: heaterPwm { 
             pwms = <&pwm2 4 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
-        };
+        };*/
 	};
 
     /* GPIO SHDN Signals */
     shdn_gpios: shdn_gpios {
         compatible = "gpio-leds";
-        cc_shdn_low: cc_shdn_low {
-			gpios = < &gpioa 0x13 0x0 >;
-			label = "Drive low to turn off CC Drive Amplifiers";
-		};
         adc_shdn_low: adc_shdn_low {
-			gpios = < &gpiob 0x4 0x0 >;
-			label = "Drive low to turn off ADC power and references";
+			gpios = < &gpioc 0x4 0x0 >;
+			label = "Drive low to turn off ADC power, references, and drive amps";
 		};
-        d0_tia_select: d0_tia_select {
-            gpios = < &gpioc 0xC 0x0 >;
-			label = "LSB of 2 bit TIA select signal";
+        tia_1_shdn_low: tia_1_shdn_low {
+            gpios = < &gpioc 0x0 0x0 >;
+			label = "TIA 1 SHDN LOW for multiplexing and power savings";
         };
-        d1_tia_select: d1_tia_select {
-            gpios = < &gpioc 0xD 0x0 >;
-			label = "MSB of 2 bit TIA select signal";
+        tia_2_shdn_low: tia_2_shdn_low {
+            gpios = < &gpioa 0xF 0x0 >;
+			label = "TIA 2 SHDN LOW for multiplexing and power savings";
+        };
+        tia_3_shdn_low: tia_3_shdn_low {
+            gpios = < &gpioa 0x0 0x0 >;
+			label = "TIA 1 SHDN LOW for multiplexing and power savings";
+        };
+        tia_4_shdn_low: tia_4_shdn_low {
+            gpios = < &gpioc 0x6 0x0 >;
+			label = "TIA 2 SHDN LOW for multiplexing and power savings";
         };
         heater_en: heater_en {
-            gpios = <&gpioc 0xE 0x0>;
+            gpios = <&gpiob 0xB 0x0>;
             label = "High enable for heater power";
         };
 
@@ -41,11 +45,12 @@
 
     aliases {
         my-ccdrive = &ccDrive;
-        my-heaterpwm = &heaterPwm;
+        //my-heaterpwm = &heaterPwm;
         my-adc-shdn-low = &adc_shdn_low;
-        my-cc-shdn-low = &cc_shdn_low;
-        my-d0 = &d0_tia_select;
-        my-d1 = &d1_tia_select;
+        my-tia1-shdn-low = &tia_1_shdn_low;
+        my-tia2-shdn-low = &tia_2_shdn_low;
+        my-tia3-shdn-low = &tia_3_shdn_low;
+        my-tia4-shdn-low = &tia_4_shdn_low;
         my-heater-en = &heater_en;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
@@ -56,7 +61,7 @@
 / {
 	zephyr,user {
 		/* adjust channel number according to pinmux in board.dts */
-		io-channels = <&adc1 3>, <&adc1 4>;
+		io-channels = <&adc1 7>, <&adc1 4>;
         io-channel-names = "Vth2", "Vth1";
 	};
 };
@@ -68,19 +73,19 @@
     //st,adc-prescaler = <256>;
     //vref-mv = <2500>;
     //status = "okay";
-    pinctrl-0 = <&adc1_in3_pc2 &adc1_in4_pc3>;
+    pinctrl-0 = <&adc1_in7_pa2 &adc1_in4_pc3>;
     //pinctrl-0 = <&adc1_in3_pc2>;
     pinctrl-names = "default";
 
-    channel@3{
-        reg = <3>;
+    channel@4{
+        reg = <4>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
     };
-    channel@4{
-        reg = <4>;
+    channel@7{
+        reg = <7>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
@@ -106,7 +111,7 @@
 
 &spi1 {
 	status = "okay";
-	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6>; // Potentially can omit nss and mosi if not using
+	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pb4>;
 	pinctrl-names = "default";
 	dmas = <&dma1 2 6 STM32_DMA_RX_FLAGS>, 
             <&dma1 3 22 STM32_DMA_TX_FLAGS>; // DMA1, channel 2, interrupt 6 corresponds to SPI 1 RX, channel 3 interrupt 7 to tx. Request 22 corresponds to our heads up timer. 
@@ -126,7 +131,7 @@
 
 &spi2 {
 	status = "okay";
-	pinctrl-0 = <&spi2_sck_pb10 &spi2_mosi_pb15>; // Potentially can omit nss and miso if not using
+	pinctrl-0 = <&spi2_sck_pb10 &spi2_mosi_pb15>;
 	pinctrl-names = "default";
 	dmas = <&dma1 4 8 STM32_DMA_RX_FLAGS>; // DMA1, channel 4, interrupt 8 corresponds to SPI 2 RX
     dma-names = "rx";
@@ -204,7 +209,8 @@
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-fast";
         status = "okay";
-        pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pa3>;
+        //pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pa3>;
+        pinctrl-0 = <&tim2_ch2_pa1>;
         pinctrl-names = "default";
     };
 };
