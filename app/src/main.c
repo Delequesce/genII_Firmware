@@ -49,22 +49,24 @@ static const uint32_t tia_shdn_states[7] = {
 };
 
 /* Heater enable on-off states */
+#if HEATER_USE_PWM
+#else
 static const uint32_t heaterEnable_states[2] = {
 		GPIO_OUTPUT_INACTIVE,
 		GPIO_OUTPUT_ACTIVE,
 };
-
+#endif
 
 /* Main data structure */
 static struct impedance_data testDataMat[MAX_N_MEASUREMENTS][4] = {{0}};
+static float Z_real_Mat[N_AVERAGES] = {0};
+static float Z_imag_Mat[N_AVERAGES] = {0};
 
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
-#if HEATER
 K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
-#endif
 #if FREE_RUN
 K_THREAD_DEFINE(ia, IA_STACK_SIZE, testThread_entry_point, &test_cfg, NULL, NULL, IA_THREAD_PRIORITY, 0, 0);
 #else
@@ -79,17 +81,21 @@ K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 4, 1); // Message queue can handle 10 items o
 const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 static const struct device *flash_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
 static const struct pwm_dt_spec ccDriver = PWM_DT_SPEC_GET(CCDRIVER);
-//static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
 static const struct device* ad4002_master = DEVICE_DT_GET(AD4002_INSTANCE_1);
 static const struct device* ad4002_slave = DEVICE_DT_GET(AD4002_INSTANCE_2);
 static const struct gpio_dt_spec adc_shdn_low = GPIO_DT_SPEC_GET(ADC_SHDN_LOW, gpios);
-//static const struct gpio_dt_spec d0 = GPIO_DT_SPEC_GET(D0, gpios);
-//static const struct gpio_dt_spec d1 = GPIO_DT_SPEC_GET(D1, gpios);
 static const struct gpio_dt_spec tia_1_shdn_low = GPIO_DT_SPEC_GET(TIA1_SHDN_LOW, gpios);
 static const struct gpio_dt_spec tia_2_shdn_low = GPIO_DT_SPEC_GET(TIA2_SHDN_LOW, gpios);
 static const struct gpio_dt_spec tia_3_shdn_low = GPIO_DT_SPEC_GET(TIA3_SHDN_LOW, gpios);
 static const struct gpio_dt_spec tia_4_shdn_low = GPIO_DT_SPEC_GET(TIA4_SHDN_LOW, gpios);
+
+// Heater Options
+#if HEATER_USE_PWM
+static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
+#else
 static const struct gpio_dt_spec heater_en = GPIO_DT_SPEC_GET(HEATER_EN, gpios);
+#endif
+
 
 #if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) || \
 	!DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
@@ -150,26 +156,29 @@ int main(){
 	int ret;
 	/* Check Device Readiness */
 	if (!device_is_ready(uart_dev)){
-		printk("Uart not ready\n");
+		printk("EUart not ready\n");
 		return -1;
 	}
 
 	/* Configure Device Params */
 	ret = configure_uart_device(uart_dev);
 	if (ret < 0){
-		printk("Uart failed to initialize\n");
+		printk("EUart failed to initialize\n");
 		return -1;
 	}
 
 	/* Turn off heater power and turn all amps and references on */
     if (!gpio_is_ready_dt(&adc_shdn_low)) {
-        printk("SHDN pins not ready");
+        printk("ESHDN pins not ready");
 		return 0;
 	}
-    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
-        printk("SHDN pins not properly configured");
+    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+        printk("ESHDN pins not properly configured");
 		return 0;
 	}
+	#if HEATER_USE_PWM
+
+	#else
 	if (!gpio_is_ready_dt(&heater_en)) {
         printk("Heater pins not ready");
 		return 0;
@@ -178,13 +187,14 @@ int main(){
         printk("Heater pins not configured");
 		return 0;
 	}
+	#endif
 
 	/* Configure TIA SHDNs, setting all SHDN to start */
     if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
 		!gpio_is_ready_dt(&tia_2_shdn_low) ||
 		!gpio_is_ready_dt(&tia_3_shdn_low) || 
 		!gpio_is_ready_dt(&tia_4_shdn_low)) {
-        printk("TIA SHDN Pins not ready");
+        printk("ETIA SHDN Pins not ready");
 		return 0;
 	}
 
@@ -192,16 +202,23 @@ int main(){
 				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
 				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
-				printk("TIA Multiplexing Error");
+				printk("ETIA Multiplexing Error");
 				return 0;
 			}
 	
-	printk("Setup Completed\n");
+	printk("ESetup Completed\n");
 
-	k_yield();
+	//k_yield();
 
 	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
 }
+
+int compare(const void* a, const void* b){
+	float fa = *(const float*) a;
+	float fb = *(const float*) b;
+	return COMPARE(fa, fb);
+}
+
 
 /* Configures UART communication parameters */
 static int configure_uart_device(const struct device *dev){
@@ -224,11 +241,11 @@ static int configure_uart_device(const struct device *dev){
 	int ret = uart_irq_callback_user_data_set(uart_dev, uart_rx_isr, NULL);
 	if (ret < 0) {
 		if (ret == -ENOTSUP) {
-			printk("Interrupt-driven UART API support not enabled\n");
+			printk("EInterrupt-driven UART API support not enabled\n");
 		} else if (ret == -ENOSYS) {
-			printk("UART device does not support interrupt-driven API\n");
+			printk("EUART device does not support interrupt-driven API\n");
 		} else {
-			printk("Error setting UART callback: %d\n", ret);
+			printk("EError setting UART callback: %d\n", ret);
 		}
 		return 0;
 	}
@@ -242,6 +259,7 @@ static int configure_uart_device(const struct device *dev){
 
 /* Polling based UART handler thread */
 static void uartIOThread_entry_point(){
+	//printk("EUart Thread Starting\n");
 
 	while(1){
 		/* Check messagequeue */
@@ -277,9 +295,9 @@ static void uartIOThread_entry_point(){
 						/* Toggle global parameter for heater thread to observe */
 						heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
-						/*if (heaterState == NOT_HEATING){
-							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
-						}*/
+						if (heaterState == NOT_HEATING){
+							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
+						}
 						break;
 					case 'B': // Calibrate System
 						activeState = CALIBRATING;
@@ -314,17 +332,13 @@ static void uartIOThread_entry_point(){
 						if (stopTest() < 0){
 							break;
 						}
-						if (activeState == TESTRUNNING){
-							uart_poll_out(uart_dev, 'X');
-						}
-						activeState = IDLE; 
-						k_thread_abort(ia_tid);
+						uart_poll_out(uart_dev, 'X');
 						break;
 				}
 			}
 		}
 		/* Yield to newly spawned thread or to heater thread */
-		k_yield();
+		k_msleep(500);
 	}
 	return;
 }
@@ -336,13 +350,17 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	ARG_UNUSED(unused2);
 	ARG_UNUSED(unused3);
 
+	//printk("EHeater Thread Starting\n");
+
 	/* Enable Heater power */
 	/*if (gpio_pin_set_dt(&heater_en, 1) < 0) {
 		return 0;
 	}*/
 
-	/* Ensure Channel is held low until heating begins */
-	//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, 0, heaterPwm.flags);
+	/* Ensure Channel is held HIGH until heating begins */
+	#if HEATER_USE_PWM
+	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
+	#endif 
 
 	/* Configure */
 	uint32_t count = 0;
@@ -360,16 +378,17 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	/* Configure channels and sequence individually prior to sampling. */
 	for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
 		if (!adc_is_ready_dt(&adc_channels[i])) {
-			printk("ADC controller device %s not ready\n", adc_channels[i].dev->name);
+			printk("EADC controller device %s not ready\n", adc_channels[i].dev->name);
 			return -1;
 		}
 
 		if (adc_channel_setup_dt(&adc_channels[i]) < 0) {
-			printk("Could not setup channel #%d\n", i);
+			printk("ECould not setup channel #%d\n", i);
 			return -1;
 		}
 	}
-	float heater_errP;
+	float heater_errP, heater_errD;
+	heater_errI = 0;
 	int err;
 	float tempAvg = 0;
 	float CCTemp = 0;
@@ -384,9 +403,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	CCTemp = tempAvg;
 	prevTempAvg = tempAvg;
 	prevCCTemp = tempAvg;
+	uint8_t tempWriteFlag = 0;
 
 	while(1){
-
 		tempAvg = readTemp(&sequence);
 
 		/* Update estimate of ClotChip Temperature based on rate of change */
@@ -401,42 +420,49 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		// }
 		/* Send temperature reading to GUI */
 		if(deviceConnected){
-			uart_write_32f(&tempAvg, 1, 'T');
+			if (tempWriteFlag == 1){
+				uart_write_32f(&tempAvg, 1, 'T');
+				tempWriteFlag = 0;
+			}
+			tempWriteFlag++;
 		}
 
-		// To Do...
 		if(heaterState == HEATING){
 			
-			/* Find proportinal and integral error */
-			//heater_errP = 37.0-tempAvg;
-			//heater_errI = heater_errI + heater_errP;
+			/* PID */
+			#if HEATER_USE_PWM
+			if (tempAvg < 20){
+				heater_errI = 0;
+				pulse_cycles = V_SIG_PERIOD;
+			}
+			else{
+				/* Find PID errors and calculate output duty cycle */
+				heater_errP = 37.0-tempAvg;
+				heater_errI = heater_errI + heater_errP;
+				heater_errD = prevTempAvg - tempAvg;
+				prevTempAvg = tempAvg;
+				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1-(K_P * heater_errP + K_I * heater_errI + K_D * heater_errD)*0.01));
+				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
+				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+			}
 
+			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
+				printk("EError: Failed to set heater pulse");
+				return -1;
+			}
+			#else
 			// Determine heater on-off state based on error
 			heater_on_off = tempAvg < 37.0 ? true : false;
 			
 			if(gpio_pin_configure_dt(&heater_en, heaterEnable_states[heater_on_off]) < 0){
 				printk("Failure setting heater state\n");
 			}
-
-			/* if(heatFlag){
-				pulse_cycles = 25;
-			}
-			else{
-				if(CCTemp > 40){
-					heatFlag = 1;
-					pulse_cycles = 25; 
-				}
-				else{
-					pulse_cycles = V_SIG_PERIOD;
-				}
-			}
-			pulse_cycles = V_SIG_PERIOD;
-			//heater_errP = 37.0-CCTemp;
+			#endif 
 
 			char int_buffer[9];
-			sprintf(int_buffer, "%lu", pulse_cycles); */
+			sprintf(int_buffer, "%lu", pulse_cycles);
 
-			// Optional Print Pulse Cycles
+			//Optional Print Pulse Cycles
 			/*uart_poll_out(uart_dev, 'E');
 			for(int k = 0; k < 2; k++){
 				uart_poll_out(uart_dev, int_buffer[k]);
@@ -444,17 +470,11 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			uart_poll_out(uart_dev, '\n');*/
 			// Update duty cycle using zephyr driver
 			//pulse_cycles = 32;
-			
-			// KEY CODE THAT SETS HEATER PWM. TURNED OFF TEMPORARILY FOR TESTING
-			/*if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
-				printk("Error: Failed to set heater pulse");
-				return -1;
-			}*/
 
 		}
 
 		/* Schedule new reading every second and let other threads run */
-		k_msleep(2000);
+		k_msleep(1000);
 	}
 	return;
 }
@@ -465,6 +485,16 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	ARG_UNUSED(unused1);
 	ARG_UNUSED(unused2);
 	//printk("EPlaceholder\n");
+
+	/* Turn turn all amps and references on */
+    if (!gpio_is_ready_dt(&adc_shdn_low)) {
+        printk("ESHDN pins not ready");
+		return 0;
+	}
+    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
+        printk("ESHDN pins not properly configured");
+		return 0;
+	}
 
 	/** Get Current Calibration Data from Flash and read into calibration structure 
 	 * If normal test is running, load the most recent calibration. 
@@ -485,18 +515,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
     } */
 
 	/* Enable ADC and CC Drive */
-	if (gpio_pin_set_dt(&adc_shdn_low, 1) < 0) {
-        printk("SHDN pins not properly set");
-		return 0;
-	}
 	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
-		printk("Error: Failed to setup CC Drive");
+		printk("EError: Failed to setup CC Drive");
 		return -1;
 	}
 
 	/* Begin Measurement */
 	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
-	uint16_t N_Averages = 100;
 	uint16_t i, j, c;
 	uint16_t n;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
@@ -519,7 +544,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		!gpio_is_ready_dt(&tia_2_shdn_low) ||
 		!gpio_is_ready_dt(&tia_3_shdn_low) || 
 		!gpio_is_ready_dt(&tia_4_shdn_low)) {
-        printk("TIA SHDN Pins not ready");
+        printk("ETIA SHDN Pins not ready");
 		return 0;
 	}
 
@@ -538,14 +563,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
 				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
-				printk("TIA Multiplexing Error");
+				printk("ETIA Multiplexing Error");
 				return 0;
 			}
 
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(SLEEP_TIME_MS); // Thread sleeps until DMA callback is triggered
-			// Processing Code
-			//...
+
 		#if FREE_RUN
 			k_msleep(1000);
 		}
@@ -595,7 +619,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	#if FREE_RUN
 	}
 	#else
-	int64_t sleepTime, timeStamp; // Timing params for measuring speed
+	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
@@ -620,7 +644,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
 				gpio_pin_configure_dt(&tia_3_shdn_low, tia_shdn_states[c+1]) < 0 ||
 				gpio_pin_configure_dt(&tia_4_shdn_low, tia_shdn_states[c]) < 0) {
-				printk("TIA Multiplexing Error");
+				printk("ETIA Multiplexing Error");
 				return 0;
 			}
 
@@ -628,7 +652,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-			for(j = 0; j < N_Averages; j++){
+			for(j = 0; j < N_AVERAGES; j++){
 
 				/* Read Data from ADC */
 				ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
@@ -667,11 +691,21 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				/* Finally, compute Z */
 				Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
 				Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
-				Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1); // Moving Average
-				Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1);
-
+				//Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1); // Moving Average
+				//Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1);
+				
+				// Full Set for Median Calculation or Outlier Removal
+				Z_real_Mat[j] = COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
+				Z_imag_Mat[j] = COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
 			}
 		
+			/* Median Calculation */
+			// Q Sort Based
+			qsort(Z_real_Mat, N_AVERAGES, sizeof(float), compare);
+			qsort(Z_imag_Mat, N_AVERAGES, sizeof(float), compare);
+			Z_real = Z_real_Mat[N_AVERAGES/2];
+			Z_imag = Z_imag_Mat[N_AVERAGES/2];
+
 			/* Apply small real and imaginary Z Offsets */
 			Z_real += Z_OFF_REAL;
 			Z_imag += Z_OFF_IMAG;
@@ -694,18 +728,22 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		/* Send data over uart */
 		if (activeState != CALIBRATING){
 			uart_write_32f(&testDataMat[i][0], 8, 'D');
+			//uart_write_32f(&testDataMat[i][0], 2, 'D');
+			//uart_poll_out(uart_dev, 'L');
 		//printk("E%lli\n", timeStamp);
 		}
 		else{
 			printk("ECalibrating\n");
 		}
 
+		//ad4002_shutdown(ad4002_master);
 		/* Collection timestamp */
-		timeStamp = k_uptime_get();
+		timeStamp = k_uptime_get() - startTime;
 
 		/* Sleep until next collection period */
-		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp+startTime;
-		k_msleep(sleepTime);
+		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp;
+		
+		k_msleep(sleepTime); // Usually around 270 msec
 		//t2 = k_uptime_get();
 		//printk("TTotal loop time: %lli\n", t2-t1);
 		//k_msleep(1000);
@@ -775,8 +813,32 @@ static void uart_write_32f(float* data, uint8_t numData, char messageCode){
 }
 
 static int stopTest(){
+	if (activeState == TESTRUNNING){
+		activeState = IDLE;
+		/* Turn off CC Drive signal */
+		if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, 0, ccDriver.flags) < 0){
+			printk("EFailed to Cancel Drive Signal");
+			return -1;
+		}
+		/* Shut down all TIAs */
+		if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+				printk("EFailed to Shut down TIAs");
+				return -1;
+			}
+		/* Shut down ADC Power */
+		if (gpio_pin_set_dt(&adc_shdn_low, 0) < 0) {
+        	printk("EADC Power not shut down");
+			return -1;
+		}
+		/* Turn off ADCs */
+		ad4002_shutdown(ad4002_master);
+
+		k_thread_abort(ia_tid);
+	}
 	activeState = IDLE;
-	k_thread_abort(ia_tid); 
 	return 0; 
 }
 
@@ -789,35 +851,40 @@ static float readTemp(struct adc_sequence* sequence){
 	float b_temp = -13.4;
 	float channel_temps_local[NUM_THERMISTORS];
 	channel_temps_local[0] = 0;
-	float tempAvg;
-	for (size_t i = 0U; i < NUM_THERMISTORS; i++) {
+	float tempAvg[5] = {0, 0, 0, 0, 0};
+	for (uint8_t j = 0; j < 5; j++){
+		for (size_t i = 0U; i < NUM_THERMISTORS; i++) {
 
-		(void)adc_sequence_init_dt(&adc_channels[i], sequence);
+			(void)adc_sequence_init_dt(&adc_channels[i], sequence);
 
-		err = adc_read_dt(&adc_channels[i], sequence);
-		if (err < 0) {
-			printk("Could not read (%d)\n", err);
-			continue;
+			err = adc_read_dt(&adc_channels[i], sequence);
+			if (err < 0) {
+				printk("ECould not read (%d)\n", err);
+				continue;
+			}
+			
+			val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
+			val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b
+			err = adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
+			if (err < 0) {
+				printk("EValue in mV not available\n");
+			}
+			else{
+				float tempValue = (val_mv) * m_temp + b_temp;
+				channel_temps_local[i] = tempValue;
+			}
 		}
-		
-		val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
-		val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b
-		err = adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
-		if (err < 0) {
-			printk("Value in mV not available\n");
+
+		for (uint8_t i = 0; i < NUM_THERMISTORS; i++){
+			tempAvg[j] = (channel_temps_local[i] + tempAvg[j] * i)/(i+1);
 		}
-		else{
-			float tempValue = (val_mv) * m_temp + b_temp;
-			channel_temps_local[i] = tempValue;
-		}
-		
-		//printk("Channel %d reading: %d\n", i, val_mv[i]);
 	}
-	tempAvg = channel_temps_local[0]; 
-	for (size_t i = 1U; i < NUM_THERMISTORS; i++){
-		tempAvg = (channel_temps_local[i] + tempAvg * i)/(i+1);
-	}
-	return tempAvg - 2;
+
+	// Mean
+	// Median
+	qsort(tempAvg, 5, sizeof(float), compare);
+
+	return tempAvg[2] - 1;
 }
 
 

@@ -172,8 +172,6 @@ static int spi_dma_setup(const struct device *dev, uint16_t* rx_buffer, const ui
 		WRITE_REG(dma_block_tx->CPAR, &spi_block->DR);
 		WRITE_REG(dma_block_tx->CNDTR, N_samples);
 
-		/* Set up DMA callback */
-		// To Do...
 	}
 
 	/* Enable SPI DMA RX Request, then enable SPI, then finally enable DMA, */
@@ -203,7 +201,7 @@ static int analog_ad4002_start_read(const struct device *dev, const uint32_t N_s
 
 	/* Enable the Timer 1 Output compares */
 	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
-
+	LL_TIM_EnableCounter(pwm_cfg->timer);
 	LL_TIM_OC_SetMode(pwm_cfg->timer, ll_channel, LL_TIM_OCMODE_PWM1);
 	GPIO_TypeDef *pa = GPIOA;
 	MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_0, GPIO_MODER_MODE8_1);
@@ -218,6 +216,16 @@ static int analog_ad4002_irq_callback_set(const struct device *dev, ad4002_irq_c
 	struct ad4002_data *dev_data = dev->data;
 	struct ad4002_config *cfg = dev->config;
 	dev_data->user_cb = cb;
+
+	return 0;
+}
+
+static int analog_ad4002_shutdown(const struct device *dev)
+{
+	//printk("Shutting Down ADC and Convert Signal");
+	const struct ad4002_config *cfg = dev->config;
+	const struct pwm_stm32_config *pwm_cfg = cfg->cnv_pwm_spec.dev->config;
+	LL_TIM_DisableCounter(pwm_cfg->timer);
 
 	return 0;
 }
@@ -302,6 +310,7 @@ static const struct ad4002_driver_api ad4002_api = {
 	.init_read = analog_ad4002_init_read,
 	.start_read = analog_ad4002_start_read,
 	.irq_callback_set = analog_ad4002_irq_callback_set,
+	.shutdown = analog_ad4002_shutdown,
 };
 
 /* This is the callback function for when the request number of samples have been read and transferred by DMA1, CH2. Should not be direct declare because we need  */
@@ -315,6 +324,7 @@ void dma_irq_tcie(const struct device *dev)
 	ll_channel = ch2ll[cfg->cnv_pwm_spec.channel - 1u];
 	//LL_TIM_OC_SetMode(pwm_cfg->timer, ll_channel, LL_TIM_OCMODE_FORCED_INACTIVE);
 	//LL_TIM_CC_DisableChannel(pwm_cfg->timer, (ll_channel|LL_TIM_CHANNEL_CH2));
+	//LL_TIM_DisableCounter(pwm_cfg->timer);
 	// Set GPIO pin to Output (Ch1 PA8)
 	GPIO_TypeDef *pa = GPIOA;
 	//MODIFY_REG(pa->MODER, GPIO_MODER_MODE8_1, GPIO_MODER_MODE8_0);

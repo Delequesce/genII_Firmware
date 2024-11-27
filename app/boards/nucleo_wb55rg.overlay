@@ -8,9 +8,9 @@
 			pwms = <&pwm2 2 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
 		};
 
-        /*heaterPwm: heaterPwm { 
+        heaterPwm: heaterPwm { 
             pwms = <&pwm2 4 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
-        };*/
+        };
 	};
 
     /* GPIO SHDN Signals */
@@ -36,22 +36,22 @@
             gpios = < &gpioc 0x6 0x0 >;
 			label = "TIA 2 SHDN LOW for multiplexing and power savings";
         };
-        heater_en: heater_en {
+       /* heater_en: heater_en {
             gpios = <&gpiob 0xB 0x0>;
             label = "High enable for heater power";
-        };
+        };*/
 
     };
 
     aliases {
         my-ccdrive = &ccDrive;
-        //my-heaterpwm = &heaterPwm;
         my-adc-shdn-low = &adc_shdn_low;
         my-tia1-shdn-low = &tia_1_shdn_low;
         my-tia2-shdn-low = &tia_2_shdn_low;
         my-tia3-shdn-low = &tia_3_shdn_low;
         my-tia4-shdn-low = &tia_4_shdn_low;
-        my-heater-en = &heater_en;
+        //my-heater-en = &heater_en;
+        my-heaterpwm = &heaterPwm;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
     };
@@ -69,8 +69,9 @@
 &adc1{
     #address-cells = <1>;
 	#size-cells = <0>;
-    //st,adc-clock-source = <ASYNC>;
-    //st,adc-prescaler = <256>;
+    st,adc-clock-source = <ASYNC>;
+    st,adc-prescaler = <256>;
+    clocks = < &rcc 0x4c 0x2000 >, <&rcc STM32_SRC_PCLK ADC_SEL(2)>;
     //vref-mv = <2500>;
     //status = "okay";
     pinctrl-0 = <&adc1_in7_pa2 &adc1_in4_pc3>;
@@ -81,14 +82,14 @@
         reg = <4>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";
-		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_MAX>;
 		zephyr,resolution = <12>;
     };
     channel@7{
         reg = <7>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";
-		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_MAX>;
 		zephyr,resolution = <12>;
     };
 };
@@ -148,12 +149,12 @@
 
 &spi1_sck_pa5 {
     //bias-pull-down;
-    slew-rate = "high-speed";
+    slew-rate = "medium-speed";
 };
 
 &spi2_sck_pb10 {
     //bias-pull-down;
-    slew-rate = "high-speed";
+    slew-rate = "medium-speed";
 };
 
 &tim2_ch2_pa1 {
@@ -184,7 +185,7 @@
 &pll {
 	div-m = <2>;
 	mul-n = <8>;
-	div-p = <2>;
+	div-p = <32>;
 	div-q = <2>;
 	div-r = <2>;
 	clocks = <&clk_hse>;
@@ -205,12 +206,12 @@
 /* For V_SIG and Heater_PWM */
 &timers2 {
     status = "okay";
-    st,prescaler = < 0 >;
+    st,prescaler = <0>;
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-fast";
         status = "okay";
-        //pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pa3>;
-        pinctrl-0 = <&tim2_ch2_pa1>;
+        pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pb11>;
+        //pinctrl-0 = <&tim2_ch2_pa1>;
         pinctrl-names = "default";
     };
 };

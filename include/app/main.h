@@ -4,10 +4,11 @@
 /* Configuration flags */
 #define FREE_RUN					0
 #define HEATER						1
+#define HEATER_USE_PWM				1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
-//#define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
+
 #define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
 #define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
 #define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
@@ -18,11 +19,18 @@
 #define TIA3_SHDN_LOW				DT_ALIAS(my_tia3_shdn_low)
 #define TIA4_SHDN_LOW				DT_ALIAS(my_tia4_shdn_low)
 
+#if HEATER_USE_PWM
+#define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
+#define K_P							8 // Ku = 25
+#define K_I							0.1 // Pu = 40 sec
+#define K_D							20 // May not be necessary
+#else
 #define HEATER_EN					DT_ALIAS(my_heater_en)
+#endif
 
 /* Threading Params */
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
-#define UARTIO_THREAD_PRIORITY   	5
+#define UARTIO_THREAD_PRIORITY   	4
 #define HEATER_THREAD_PRIORITY		5
 #define IA_STACK_SIZE            	4096
 #define UARTIO_STACK_SIZE        	1024
@@ -35,6 +43,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
+#define N_AVERAGES					100
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -62,8 +71,6 @@
 #define UART_MSB_FIRST				1
 #define NUM_THERMISTORS				2
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define K_P							20 // 8
-#define K_I							0.10 // 0.1
 
 
 /* Helper Macros */
@@ -71,6 +78,7 @@
 #define COMPLEX_DIVIDE_IMAG(r1, i1, r2, i2) (r2*i1 - r1*i2)/(r2*r2 + i2*i2)
 #define COMPLEX_MULTIPLY_REAL(r1, i1, r2, i2) (r1*r2 - i1*i2)
 #define COMPLEX_MULTIPLY_IMAG(r1, i1, r2, i2) (r2*i1 + r1*i2)
+#define COMPARE(a, b) (((a) > (b)) - ((a) < (b)))
 
 #define DT_SPEC_AND_COMMA(node_id, prop, idx) \
 	ADC_DT_SPEC_GET_BY_IDX(node_id, idx),
