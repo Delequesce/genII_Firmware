@@ -5,6 +5,7 @@
 #define FREE_RUN					0
 #define HEATER						1
 #define HEATER_USE_PWM				1
+#define ASSEMBLY_TESTING			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -48,6 +49,7 @@
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
 #define DEFAULT_RUN_TIME			1800
+#define DEFAULT_EQC_TIME			30
 #define DEFAULT_INCUBATION_TEMP		37
 #define DEFAULT_SPOT_FREQUENCY		1000000
 #define CONVERT_FREQUENCY			1032258
@@ -59,7 +61,7 @@
 #define ADC_RESOLUTION				16
 #define BITS_USED					16
 #define RESOLUTION_MASK				0xFFFF << (ADC_RESOLUTION - BITS_USED) // 0xFFFF is 16 bits, 0xFFFC is 14
-#define MAX_N_MEASUREMENTS			0x800 // (0x1000 = 4096)
+#define MAX_N_MEASUREMENTS			0x1000 // (0x1000 = 4096)
 
 /* Other constants */
 #define PI						 	3.141592654
@@ -71,6 +73,7 @@
 #define UART_MSB_FIRST				1
 #define NUM_THERMISTORS				2
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
+#define TEMP_OFFSET					-1
 
 
 /* Helper Macros */

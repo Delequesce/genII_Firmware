@@ -62,6 +62,14 @@ static struct impedance_data testDataMat[MAX_N_MEASUREMENTS][4] = {{0}};
 static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
 
+/* Quality Check Structure */
+static const struct impedance_data qcData[4] = {
+	{.C = 46.5, .G = 5.57}, 
+	{.C = 101.5, .G = 2.57},
+	{.C = 230.0, .G = 10.05}, 
+	{.C = 324.6, .G = 5.02}, 
+};
+
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
 struct k_thread IA_thread_data;
@@ -172,10 +180,22 @@ int main(){
         printk("ESHDN pins not ready");
 		return 0;
 	}
-    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+	#if ASSEMBLY_TESTING
+    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("ESHDN pins not properly configured");
 		return 0;
 	}
+	/* Enable ADC and CC Drive */
+	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
+		printk("EError: Failed to setup CC Drive");
+		return -1;
+	}
+	#else
+	if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
+        printk("ESHDN pins not properly configured");
+		return 0;
+	}
+	#endif
 	#if HEATER_USE_PWM
 
 	#else
@@ -198,6 +218,15 @@ int main(){
 		return 0;
 	}
 
+	#if ASSEMBLY_TESTING
+	if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
+				printk("ETIA Multiplexing Error");
+				return 0;
+			}
+	#else
 	if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
@@ -205,7 +234,7 @@ int main(){
 				printk("ETIA Multiplexing Error");
 				return 0;
 			}
-	
+	#endif
 	printk("ESetup Completed\n");
 
 	//k_yield();
@@ -282,6 +311,12 @@ static void uartIOThread_entry_point(){
 						// Respond positively
 						uart_poll_out(uart_dev, 'K');
 						break;
+					case 'L':
+						test_cfg.channelOn[0] = p_char[1] & 0x1;
+						test_cfg.channelOn[1] = p_char[1] & 0x2;
+						test_cfg.channelOn[2] = p_char[1] & 0x4;
+						test_cfg.channelOn[3] = p_char[1] & 0x8;
+						break;
 					case 'N': // New Test
 						activeState = TESTRUNNING;
 						/* Allocate memory and spawn new thread */
@@ -296,6 +331,7 @@ static void uartIOThread_entry_point(){
 						heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
 						if (heaterState == NOT_HEATING){
+							//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 						}
 						break;
@@ -315,7 +351,17 @@ static void uartIOThread_entry_point(){
 						break;
 					case 'Q': // Run EQC
 						activeState = EQC;
-						//runEQC();
+						struct test_config eqc_cfg = {
+							.runTime = DEFAULT_EQC_TIME,
+							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+							.incubationTemp = 0,
+							.channelOn = {1, 1, 1, 1},
+						};
+						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+										K_THREAD_STACK_SIZEOF(IA_stack_area),
+										testThread_entry_point, 
+										&eqc_cfg, NULL, NULL, 
+										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
 					case 'F': // Free Run
 						activeState = FREERUNNING;
@@ -437,7 +483,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			}
 			else{
 				/* Find PID errors and calculate output duty cycle */
-				heater_errP = 37.0-tempAvg;
+				heater_errP = test_cfg.incubationTemp-tempAvg;
 				heater_errI = heater_errI + heater_errP;
 				heater_errD = prevTempAvg - tempAvg;
 				prevTempAvg = tempAvg;
@@ -500,7 +546,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	 * If normal test is running, load the most recent calibration. 
 	 * If test is for calibration, use default values for easy calibration. 
 	*/
-	if (activeState == TESTRUNNING){
+	if (activeState != CALIBRATING){
 		flash_read(flash_device, PAGE200, &calibMat, 32);
 	}
 
@@ -726,14 +772,14 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		}
 
 		/* Send data over uart */
-		if (activeState != CALIBRATING){
+		if (activeState == TESTRUNNING){
 			uart_write_32f(&testDataMat[i][0], 8, 'D');
 			//uart_write_32f(&testDataMat[i][0], 2, 'D');
 			//uart_poll_out(uart_dev, 'L');
 		//printk("E%lli\n", timeStamp);
 		}
 		else{
-			printk("ECalibrating\n");
+			//printk("ECalibrating\n");
 		}
 
 		//ad4002_shutdown(ad4002_master);
@@ -772,6 +818,45 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		//flash_write_protection_set(flash_device, true);
 		activeState = IDLE;
 		return;
+	}
+	/* Compare qcData struct to average of testDataMat */
+	else if(activeState == EQC){
+		float C_sum[4] = {0};
+		float G_sum[4] = {0};
+		float C_var[4] = {0};
+		float G_var[4] = {0};
+		struct impedance_data rmsd_noise[2] = {{.C = 0, .G = 0}};
+		
+		// Get Mean and RMS Deviation
+		for(c = 0; c < 4; c++){
+			for(i = 0; i < N_Measurements; i++){
+				C_sum[c] += testDataMat[i][c].C;
+				G_sum[c] += testDataMat[i][c].G;
+			}
+			C_sum[c] = C_sum[c] * 0.0333333f; 
+			G_sum[c] = G_sum[c] * 0.0333333f;
+
+			rmsd_noise[0].C += pow(qcData[c].C - C_sum[c], 2);
+			rmsd_noise[0].G += pow(qcData[c].G - G_sum[c], 2);
+		}
+		// Get Standard Deviation (noise)
+		for(c = 0; c < 4; c++){
+			for(i = 0; i < N_Measurements; i++){
+				C_var[c] += pow(testDataMat[i][c].C - C_sum[c], 2);
+				G_var[c] += pow(testDataMat[i][c].G - G_sum[c], 2);
+			}
+			rmsd_noise[1].C += C_var[c] * 0.033f;
+			rmsd_noise[1].G += G_var[c] * 0.033f;
+		}
+		// Calculate RMSD and noise across 4 chips
+		rmsd_noise[0].C = 0.5 * sqrt(rmsd_noise[0].C) * 0.3; // Magic numbers are to normalize over range and convert to %
+		rmsd_noise[0].G = 0.5 * sqrt(rmsd_noise[0].G) * 12.5;
+
+		rmsd_noise[1].C = 0.5 * sqrt(rmsd_noise[1].C); // In pF
+		rmsd_noise[1].G = 0.5 * sqrt(rmsd_noise[1].G);
+
+		// Write to User
+		uart_write_32f(&rmsd_noise, 4, 'Q');
 	}
 	else{
 		/* Store Test Data in Flash */
@@ -884,7 +969,7 @@ static float readTemp(struct adc_sequence* sequence){
 	// Median
 	qsort(tempAvg, 5, sizeof(float), compare);
 
-	return tempAvg[2] - 1;
+	return tempAvg[2] - TEMP_OFFSET;
 }
 
 

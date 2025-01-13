@@ -9,7 +9,7 @@
 		};
 
         heaterPwm: heaterPwm { 
-            pwms = <&pwm2 4 PWM_NSEC(15) PWM_POLARITY_NORMAL>;
+            pwms = <&pwm16 1 PWM_NSEC(1000000) PWM_POLARITY_NORMAL>;
         };
 	};
 
@@ -21,20 +21,24 @@
 			label = "Drive low to turn off ADC power, references, and drive amps";
 		};
         tia_1_shdn_low: tia_1_shdn_low {
-            gpios = < &gpioc 0x0 0x0 >;
+            //gpios = < &gpioc 0x0 0x0 >;
+            gpios = < &gpioa 0xF 0x0 >;
 			label = "TIA 1 SHDN LOW for multiplexing and power savings";
         };
         tia_2_shdn_low: tia_2_shdn_low {
-            gpios = < &gpioa 0xF 0x0 >;
+            //gpios = < &gpioa 0xF 0x0 >;
+            gpios = < &gpioc 0x6 0x0 >;
 			label = "TIA 2 SHDN LOW for multiplexing and power savings";
         };
         tia_3_shdn_low: tia_3_shdn_low {
-            gpios = < &gpioa 0x0 0x0 >;
-			label = "TIA 1 SHDN LOW for multiplexing and power savings";
+            //gpios = < &gpioa 0x0 0x0 >;
+            gpios = < &gpioc 0x0 0x0 >;
+			label = "TIA 3 SHDN LOW for multiplexing and power savings";
         };
         tia_4_shdn_low: tia_4_shdn_low {
-            gpios = < &gpioc 0x6 0x0 >;
-			label = "TIA 2 SHDN LOW for multiplexing and power savings";
+            //gpios = < &gpioc 0x6 0x0 >;
+            gpios = < &gpioa 0x0 0x0 >;
+			label = "TIA 4 SHDN LOW for multiplexing and power savings";
         };
        /* heater_en: heater_en {
             gpios = <&gpiob 0xB 0x0>;
@@ -203,14 +207,14 @@
     //ahb4-prescaler = <1>;
 };
 
-/* For V_SIG and Heater_PWM */
+/* For V_SIG */
 &timers2 {
     status = "okay";
     st,prescaler = <0>;
     pwm2: pwm {
         //compatible = "st,stm32-pwm-custom-fast";
         status = "okay";
-        pinctrl-0 = <&tim2_ch2_pa1 &tim2_ch4_pb11>;
+        pinctrl-0 = <&tim2_ch2_pa1>;
         //pinctrl-0 = <&tim2_ch2_pa1>;
         pinctrl-names = "default";
     };
@@ -227,6 +231,23 @@
     };
 };
 
+/* For Heater PWM */
+&timers16 {
+    status = "okay";
+    st,prescaler = <2548>; // Around 25 kHz
+    pwm16: pwm {
+        status = "okay";
+        pinctrl-0 = <&tim16_ch1_pb8>;
+        pinctrl-names = "default";
+    };
+};
+
 &tim1_ch1_pa8 {
     bias-pull-down;
 };
+
+// Heater PWM
+&tim16_ch1_pb8 {
+    slew-rate = "low-speed";
+};
+
