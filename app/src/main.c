@@ -58,7 +58,8 @@ static const uint32_t heaterEnable_states[2] = {
 #endif
 
 /* Main data structure */
-static struct impedance_data testDataMat[MAX_N_MEASUREMENTS][4] = {{0}};
+static struct impedance_data testDataMat[DEFAULT_EQC_TIME][4] = {{0}};
+static struct impedance_data testDataMat_lite[4] = {0};
 static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
 
@@ -334,6 +335,8 @@ static void uartIOThread_entry_point(){
 							//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 						}
+						// Acknowledge Request
+						uart_poll_out(uart_dev, 'K');
 						break;
 					case 'B': // Calibrate System
 						activeState = CALIBRATING;
@@ -766,14 +769,23 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			else{
 				/* Final Calculation and storage */
 				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-				testDataMat[i][c].G = 1000 * Z_real/mag2Z;				// Result is in mS
-				testDataMat[i][c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+				if(activeState == EQC)
+				{
+					testDataMat[i][c].G = 1000 * Z_real/mag2Z;				// Result is in mS
+					testDataMat[i][c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+				}
+				else
+				{
+					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
+					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+				}
+
 			}
 		}
 
 		/* Send data over uart */
 		if (activeState == TESTRUNNING){
-			uart_write_32f(&testDataMat[i][0], 8, 'D');
+			uart_write_32f(&testDataMat_lite[0], 8, 'D');
 			//uart_write_32f(&testDataMat[i][0], 2, 'D');
 			//uart_poll_out(uart_dev, 'L');
 		//printk("E%lli\n", timeStamp);
