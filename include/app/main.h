@@ -1,8 +1,8 @@
 #ifndef MAIN_INCLUDE_HEADER
 #define MAIN_INCLUDE_HEADER
 
+
 /* Configuration flags */
-#define FREE_RUN					0
 #define HEATER						1
 #define HEATER_USE_PWM				1
 #define ASSEMBLY_TESTING			0
@@ -36,7 +36,7 @@
 #define IA_STACK_SIZE            	4096
 #define UARTIO_STACK_SIZE        	1024
 #define HEATER_STACK_SIZE			1024
-#define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
+//#define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
 /* UART */
 #define MSG_SIZE 9
@@ -66,7 +66,7 @@
 /* Other constants */
 #define PI						 	3.141592654
 #define V_SIG_PERIOD        		64  /* In clock cycles */
-#define N_DATA_BYTES				4 
+//#define N_DATA_BYTES				4 
 #define PAGE255						0x0FF000
 #define PAGE200						0x0C8200
 #define UART_LSB_FIRST				0
@@ -74,6 +74,20 @@
 #define NUM_THERMISTORS				2
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
 #define TEMP_OFFSET					-1
+
+/* For calculate parameters */
+#define MA_BUF_N 			10
+#define SLOPE_THRESH		-0.00002
+#define FALL_THRESH			0.99
+#define EARLIEST_PEAK_TIME	10 // Usually
+#define SLPFLAG_I			0x01
+#define PEAKFOUND_I			0x02
+#define DELTAEPSFOUND_I		0x04
+#define SMAXFOUND_I			0x08
+#define SLPFLAG(x)			((*x) & SLPFLAG_I)
+#define PEAKFOUND(x)		((*x) & PEAKFOUND_I)
+#define DELTAEPSFOUND(x)	((*x) & DELTAEPSFOUND_I)
+#define SMAXFOUND(x)		((*x) & SMAXFOUND_I)
 
 
 /* Helper Macros */
@@ -92,7 +106,6 @@ enum testStates {
 	TESTRUNNING,
 	CALIBRATING,
 	EQC,
-	FREERUNNING,
 };
 
 enum heaterStates {
@@ -117,6 +130,14 @@ struct impedance_data{
 	float G;
 };
 
+struct outputParams{
+	float tPeak;
+	float deltaEps;
+	float deltaEpsTime;
+	float smax;
+	float smaxTime;
+};
+
 
 /* Other global Variables */
 static float heater_errI;
@@ -131,6 +152,5 @@ static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
-
 
 #endif

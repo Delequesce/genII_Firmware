@@ -16,13 +16,11 @@
 #include <zephyr/drivers/adc.h>
 #include <string.h>
 #include <app/main.h>
+#include <app/circularbuffer.h>
 
 /* Default States */
-#if FREE_RUN
-enum testStates activeState = FREERUNNING;
-#else
+
 enum testStates activeState = IDLE;
-#endif
 enum heaterStates heaterState = NOT_HEATING; 
 
 static struct test_config test_cfg = {
@@ -57,6 +55,9 @@ static const uint32_t heaterEnable_states[2] = {
 };
 #endif
 
+/* Function forward Declaration */
+static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData, uint8_t* flags);
+
 /* Main data structure */
 static struct impedance_data testDataMat[DEFAULT_EQC_TIME][4] = {{0}};
 static struct impedance_data testDataMat_lite[4] = {0};
@@ -76,12 +77,8 @@ k_tid_t ia_tid; // IA Measurement Thread
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
 K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
-#if FREE_RUN
-K_THREAD_DEFINE(ia, IA_STACK_SIZE, testThread_entry_point, &test_cfg, NULL, NULL, IA_THREAD_PRIORITY, 0, 0);
-#else
 K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
-#endif
 
 /* Message and work queue */
 K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 4, 1); // Message queue can handle 10 items of size MSG_SIZE (bytes), aligned to 1 byte boundary. 
@@ -366,15 +363,6 @@ static void uartIOThread_entry_point(){
 										&eqc_cfg, NULL, NULL, 
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
-					case 'F': // Free Run
-						activeState = FREERUNNING;
-						/* Allocate memory and spawn new thread */
-						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-										K_THREAD_STACK_SIZEOF(IA_stack_area),
-										testThread_entry_point, 
-										&test_cfg, NULL, NULL, 
-										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-						break;
 				}
 				else{
 					case 'X': // Stop Test
@@ -584,9 +572,26 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float prev_value_Vr, prev_value_Ve;
 	float prev_prev_value_Vr, prev_prev_value_Ve;
 	float current_value_Vr, current_value_Ve;
-	//struct impedance_data impDat = {.C = 0, .G = 0};
+
+	/* Output Parameter Structure */
+	static struct outputParams opData = {
+		.tPeak = 0,
+		.deltaEps = 0,
+		.deltaEpsTime = 0,
+		.smax = 0,
+		.smaxTime = 0,
+	};
 
 	unsigned char a_char;
+
+	// For param calculation
+	static float ma_buf[MA_BUF_N];
+	static circular_buf_t cbt = {
+        .buffer = ma_buf,
+    };
+	circular_buffer_init(&cbt, MA_BUF_N);
+	uint8_t flags = 0;
+
 
 	/* Configure TIA SHDNs */
     if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
@@ -601,77 +606,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
 	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
 
-	//activeState = FREERUNNING; // Set to manually force freerunning test case
-	if(activeState == FREERUNNING){
-		int8_t N_chunks = SAMPLES_PER_COLLECTION/32;
-		while(1){
-			
-			/* Within loop, start read, wait for interrupt, then processing */
-			/* Set Active Channel to Channel 0 by setting all SHDNs but TIA 1 LOW */
-			if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || 
-				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
-				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
-				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
-				printk("ETIA Multiplexing Error");
-				return 0;
-			}
-
-			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
-			k_msleep(SLEEP_TIME_MS); // Thread sleeps until DMA callback is triggered
-
-		#if FREE_RUN
-			k_msleep(1000);
-		}
-		#else
-
-			/* Copy data to safe memory location */ 
-			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
-
-			/* Loop through and send all data to UI */
-			char buffer[9];
-			float tempFloat;
-			unsigned char s_char;
-			uint8_t n, k;
-			/* We have to chunk the data to avoid buffer overflow */
-			
-			for(j = 0; j < N_chunks; j++){
-				s_char = 0;
-				uart_poll_out(uart_dev, 'F');
-				for(i = 32 * j; i < 32*(j+1); i++){
-					tempFloat = 3*Ve_data_safe[i]/65535.0f;
-					n = snprintf(buffer, 9, "%f", tempFloat);
-					for(k = 0; k < n; k++){
-						uart_poll_out(uart_dev, buffer[k]);
-					}
-					uart_poll_out(uart_dev, '!');
-					tempFloat = 3*Vr_data_safe[i]/65535.0f;
-					n = snprintf(buffer, 9, "%f", tempFloat);
-					for(k = 0; k < n; k++){
-						uart_poll_out(uart_dev, buffer[k]);
-					}
-					uart_poll_out(uart_dev, '!');
-				}
-				uart_poll_out(uart_dev, '\n');
-				/* Wait for response from UI before sending more data */
-				/*while (s_char != 'K'){
-					uart_poll_in(uart_dev, &s_char);
-				}*/
-			}
-			
-			k_msleep(1000);
-		}
-		#endif
-	}
-	else{
-
-	#if FREE_RUN
-	}
-	#else
 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
+
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
 
@@ -786,6 +725,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		/* Send data over uart */
 		if (activeState == TESTRUNNING){
 			uart_write_32f(&testDataMat_lite[0], 8, 'D');
+
+			// Pass data to a helper function that calculates a moving average and determines if parameters can be extracted
+			calculateParameters(&cbt, i, testDataMat_lite[0].C, &opData, &flags);
+			uart_write_32f(&opData, 5, 'O');
+
 			//uart_write_32f(&testDataMat[i][0], 2, 'D');
 			//uart_poll_out(uart_dev, 'L');
 		//printk("E%lli\n", timeStamp);
@@ -879,8 +823,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	activeState = IDLE;
 	printk("X\n");
 	return; 
-	}
-#endif
 }
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
@@ -989,4 +931,96 @@ static float readTemp(struct adc_sequence* sequence){
 static void dma_tcie_callback(){
 
 	k_wakeup(ia_tid);
+}
+
+/**
+ * Runs every iteration of data collection to calculate parameters
+ * flags is [slp_flag, tPeakFound, deltaEpsFound, smaxFound]
+ * */
+
+static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData, uint8_t* flags)
+{
+	// Static variables (initialized to zero automatically, updated during calls so no need to reset)
+    static float x_ma;
+    static float prevX;
+    static float slp;
+    static float C_max;
+
+	// Add incoming data to moving average window
+	circular_buffer_put(cbt, data);
+	x_ma = circular_buffer_avg(cbt);
+
+
+	if(n < 1)
+	{
+		prevX = 0;
+
+	}
+
+	// Don't calculate parameters until after 60 seconds
+	if (n < EARLIEST_PEAK_TIME){
+		return;
+	}
+	
+	slp = x_ma - prevX;
+	prevX = x_ma;
+	
+	
+	/* Tpeak */
+	if(!PEAKFOUND(flags)){
+		if(!SLPFLAG(flags) && slp > 0){
+			(*flags) ^= SLPFLAG_I;
+			return;
+		}
+		
+		if(slp < 0 && opData->tPeak == 0)
+		{
+			// Local or Absolute Maximum
+			opData->tPeak = n;
+			C_max = data;
+			return;
+		}
+
+		// Determine if max is local or absolute
+		if(data > C_max)
+		{
+			// Can't be a maximum, reset tpeak and Cmax
+			opData->tPeak = 0;
+			C_max = 0;
+			return;
+		}
+		(*flags) ^= PEAKFOUND_I;
+		//printf("Peak Found at t = %d sec, %0.2f pF\n", opData->tPeak, C_max);
+		return;
+	}
+	/* Smax (Un-normalized) */
+	if(!SMAXFOUND(flags))
+	{
+		//printf("%d: slp = %0.8f\t smax = %0.8f\t", n, slp, smax);
+		if(slp < opData->smax){
+			opData->smax = slp;
+			opData->smaxTime = n;
+		}
+	}
+	
+	/* Delta Epsilon (Un-normalized)*/
+	if(!DELTAEPSFOUND(flags)){
+		// Wait until value has fallen significantly from the peak
+		if(x_ma > C_max * FALL_THRESH){
+			return;
+		}
+		if(slp > SLOPE_THRESH*C_max)
+		{
+			opData->deltaEps = data/C_max;
+			opData->deltaEpsTime = n;
+			(*flags) ^= DELTAEPSFOUND_I;
+			//printf("Delta Eps Found at t = %d sec, %0.4f\n", opData->deltaEpsTime, opData->deltaEps);
+
+			opData->smax = opData->smax/C_max;
+			(*flags) ^= SMAXFOUND_I;
+			//printf("Smax Found at t = %d sec, %0.6f\n", opData->smaxTime, opData->smax);
+
+			return;
+		}
+	}
 }
