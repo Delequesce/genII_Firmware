@@ -40,11 +40,14 @@
             gpios = < &gpioa 0x0 0x0 >;
 			label = "TIA 4 SHDN LOW for multiplexing and power savings";
         };
-       /* heater_en: heater_en {
-            gpios = <&gpiob 0xB 0x0>;
-            label = "High enable for heater power";
-        };*/
-
+        charge_enable_high: charge_enable_high {
+            gpios = < &gpiob 0x2 0x0 >;
+            label = "Charge Enable Output. Goes LOW to disable battery charging"
+        };
+        power_enable_low: power_enable_low {
+            gpios = <&gpiob 0xB 0x0 >;
+            label = "Power Enable. Set LOW by default"
+        };
     };
 
     aliases {
@@ -54,7 +57,10 @@
         my-tia2-shdn-low = &tia_2_shdn_low;
         my-tia3-shdn-low = &tia_3_shdn_low;
         my-tia4-shdn-low = &tia_4_shdn_low;
-        //my-heater-en = &heater_en;
+        my-charge-enable-high = &charge_enable_high;
+        my-power-enable-low = &power_enable_low;
+        //my-power-button = &-----
+
         my-heaterpwm = &heaterPwm;
         ad4002-ch1 = &ad4002_1;
         ad4002-ch2 = &ad4002_2;
@@ -79,17 +85,26 @@
     //vref-mv = <2500>;
     //status = "okay";
     pinctrl-0 = <&adc1_in7_pa2 &adc1_in4_pc3>;
+    //pinctrl-0 = <&adc1_in7_pa2 &adc1_in4_pc3 &adc1_in2_pc1>;
     //pinctrl-0 = <&adc1_in3_pc2>;
     pinctrl-names = "default";
 
-    channel@4{
+    /*channel@2{ // Battery Level
+        reg = <2>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_MAX>;
+		zephyr,resolution = <12>;
+    };*/
+    
+    channel@4{ // Thermistor 1
         reg = <4>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";
 		zephyr,acquisition-time = <ADC_ACQ_TIME_MAX>;
 		zephyr,resolution = <12>;
     };
-    channel@7{
+    channel@7{ // Thermistor 2
         reg = <7>;
         zephyr,gain = "ADC_GAIN_1";
         zephyr,reference = "ADC_REF_INTERNAL";

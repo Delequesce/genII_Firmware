@@ -46,14 +46,9 @@ static const uint32_t tia_shdn_states[7] = {
 	GPIO_OUTPUT_INACTIVE,
 };
 
-/* Heater enable on-off states */
-#if HEATER_USE_PWM
-#else
-static const uint32_t heaterEnable_states[2] = {
-		GPIO_OUTPUT_INACTIVE,
-		GPIO_OUTPUT_ACTIVE,
-};
-#endif
+/* Battery LUTs */
+static const uint8_t capacityArray[11] = {100, 94, 85, 75, 62, 53, 40, 22, 13, 3, 0};
+//static const uint8_t voltageArray[11] = {4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, }
 
 /* Function forward Declaration */
 static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData, uint8_t* flags);
@@ -76,8 +71,8 @@ static const struct impedance_data qcData[4] = {
 k_tid_t ia_tid; // IA Measurement Thread
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
-K_THREAD_DEFINE(heater, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
-K_THREAD_DEFINE(uartIO, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
+K_THREAD_DEFINE(heater_tid, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
+K_THREAD_DEFINE(uartIO_tid, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 
 /* Message and work queue */
@@ -94,13 +89,12 @@ static const struct gpio_dt_spec tia_1_shdn_low = GPIO_DT_SPEC_GET(TIA1_SHDN_LOW
 static const struct gpio_dt_spec tia_2_shdn_low = GPIO_DT_SPEC_GET(TIA2_SHDN_LOW, gpios);
 static const struct gpio_dt_spec tia_3_shdn_low = GPIO_DT_SPEC_GET(TIA3_SHDN_LOW, gpios);
 static const struct gpio_dt_spec tia_4_shdn_low = GPIO_DT_SPEC_GET(TIA4_SHDN_LOW, gpios);
+static const struct gpio_dt_spec charge_enable_high = GPIO_DT_SPEC_GET(CHARGE_ENABLE_HIGH, gpios);
+static const struct gpio_dt_spec power_enable_low = GPIO_DT_SPEC_GET(POWER_ENABLE_LOW, gpios);
+//static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET_OR(POWER_BUTTON, gpios, {0});
 
 // Heater Options
-#if HEATER_USE_PWM
 static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
-#else
-static const struct gpio_dt_spec heater_en = GPIO_DT_SPEC_GET(HEATER_EN, gpios);
-#endif
 
 
 #if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) || \
@@ -116,8 +110,6 @@ static const struct adc_dt_spec adc_channels[] = {
 /* UART ISR params */
 static char rx_buf[MSG_SIZE];
 static int rx_buf_pos = 0;
-
-//static const struct adc_dt_spec adc_channels[] = {ADC_DT_SPEC_GET_BY_NAME(DT_PATH(zephyr_user), vth2)};
 
 
 /* ISR strictly needs to read data from FIFO and store into queue for message handler workthread */
@@ -194,18 +186,6 @@ int main(){
 		return 0;
 	}
 	#endif
-	#if HEATER_USE_PWM
-
-	#else
-	if (!gpio_is_ready_dt(&heater_en)) {
-        printk("Heater pins not ready");
-		return 0;
-	}
-	if (gpio_pin_configure_dt(&heater_en, GPIO_OUTPUT_INACTIVE) < 0) {
-        printk("Heater pins not configured");
-		return 0;
-	}
-	#endif
 
 	/* Configure TIA SHDNs, setting all SHDN to start */
     if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
@@ -233,7 +213,34 @@ int main(){
 				return 0;
 			}
 	#endif
-	printk("ESetup Completed\n");
+
+	/* Set up power to Raspberry Pi (Power enable) and battery charging (charge enable) GPIOs */
+	if (!gpio_is_ready_dt(&charge_enable_high) || gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_ACTIVE) < 0){
+		printk("ECannot set charge enable, Battery Charging disabled");
+	}
+
+	if (!gpio_is_ready_dt(&power_enable_low) || gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_INACTIVE) < 0){
+		printk("ECannot enable power input to Pi.");
+		return 0;
+	}
+
+	/*
+	ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret != 0) {
+	printk("Error %d: failed to configure interrupt on %s pin %d\n",
+	ret, button.port->name, button.pin);
+	return 0;
+	}
+
+	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
+	gpio_add_callback(button.port, &button_cb_data);
+	*/
+
+	/*
+	if (readBatteryLevel_Init() < 0){
+		printk("EBattery Reading Initialization Failure. Cannot read battery voltages");
+	}
+	*/
 
 	//k_yield();
 
@@ -395,9 +402,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	}*/
 
 	/* Ensure Channel is held HIGH until heating begins */
-	#if HEATER_USE_PWM
 	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
-	#endif 
 
 	/* Configure */
 	uint32_t count = 0;
@@ -413,7 +418,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	};
 	
 	/* Configure channels and sequence individually prior to sampling. */
-	for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+	for (size_t i = 0U; i < NUM_THERMISTOR_CHANNELS; i++) {
 		if (!adc_is_ready_dt(&adc_channels[i])) {
 			printk("EADC controller device %s not ready\n", adc_channels[i].dev->name);
 			return -1;
@@ -467,7 +472,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		if(heaterState == HEATING){
 			
 			/* PID */
-			#if HEATER_USE_PWM
 			if (tempAvg < 20){
 				heater_errI = 0;
 				pulse_cycles = V_SIG_PERIOD;
@@ -487,14 +491,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 				printk("EError: Failed to set heater pulse");
 				return -1;
 			}
-			#else
-			// Determine heater on-off state based on error
-			heater_on_off = tempAvg < 37.0 ? true : false;
-			
-			if(gpio_pin_configure_dt(&heater_en, heaterEnable_states[heater_on_off]) < 0){
-				printk("Failure setting heater state\n");
-			}
-			#endif 
 
 			char int_buffer[9];
 			sprintf(int_buffer, "%lu", pulse_cycles);
@@ -932,6 +928,129 @@ static void dma_tcie_callback(){
 
 	k_wakeup(ia_tid);
 }
+
+/** Sets up battery level read, either should make into thread or call on startup */
+static uint8_t readBatteryLevel_Init(){
+
+	/* Buffer where samples will be written */
+	uint16_t buf;
+	struct adc_sequence sequence = {
+		.buffer = &buf,
+		/* buffer size in bytes, not number of samples */
+		.buffer_size = sizeof(buf),
+		.calibrate = false,
+	};
+	
+	/* Configure channel and sequence prior to sampling. */
+	if (!adc_is_ready_dt(&adc_channels[NUM_THERMISTOR_CHANNELS])) {
+		printk("EADC controller device %s not ready\n", adc_channels[NUM_THERMISTOR_CHANNELS].dev->name);
+		return -1;
+	}
+
+	if (adc_channel_setup_dt(&adc_channels[NUM_THERMISTOR_CHANNELS]) < 0) {
+		printk("ECould not setup battery read channel\n");
+		return -1;
+	}
+
+	return 0;
+	/* End Initialization Block */
+}
+
+/** This function is called periodically to read the battery level and send data to Pi */
+static uint8_t readBatteryLevel(struct adc_sequence* sequence){
+
+	int err;
+	int16_t* val_mv_ptr;
+	int32_t val_mv;
+	uint8_t currentBatteryCapacity = 0;
+
+	/* First have to disable battery charging to allow for reading voltage */
+	if (gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_INACTIVE) < 0) {
+        printk("ECannot Read Battery Level\n");
+		return -1;
+	}
+
+	(void)adc_sequence_init_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], sequence);
+
+	err = adc_read_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], sequence);
+	if (err < 0) {
+		printk("ECould not read (%d)\n", err);
+		return -1;
+	}
+	
+	val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
+	val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b. This is the voltage level in mV
+	err = adc_raw_to_millivolts_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], &val_mv);
+	if (err < 0) {
+		printk("EValue in mV not available\n");
+		return -1;
+	}
+	
+	/**
+	 * Compare to LUT to determine battery level 
+	 * If the battery is actively supplying power, will have to take into account cabling resistance 
+	 * and average current level. Need to take readings over a 5-10 second period and then average.
+	 * If the battery is being charged, this will not need to be taken into account, since the discharge rate
+	 * is 0. Therefore, we will need 2 LUTs. 
+	 * */
+	currentBatteryCapacity = capacityArray[(int8_t)(0.01 * (4200 - val_mv))];
+
+	/* Finally re-enable battery charging */
+	if (gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_ACTIVE) < 0) {
+        printk("EError Re-enabling battery charging\n");
+		return -1;
+	}
+	return currentBatteryCapacity;
+}
+
+/**
+ * These are called when a specific interrupt is triggerred
+ * The procedure is below: 
+ * 1) User holds button down. This triggers ISR on PC5.
+ * 2) The ISR determines if its a wakeup or shutdown by checking status of power_enable pin. 
+ *    It then calls the relevant function: wakeupSystem() or shutdownSystem()
+ * SHUTDOWN
+ * 1) Shutdown function aborts test and heater threads, keeping uart for communication with Pi. 
+ * 2) It then sends UART signal to Pi with shutdown command (b'ZZZ').
+ * 3) It then idles and waits for response b'K' from Pi, indicating that it is shutting itself down
+ * 4) MCU waits 30 seconds before toggling POWER_EN to HIGH, cutting power to Pi. 
+ * 5) Finally, the MCU shuts down the uart thread and just waits for second ISR on PC5 (button press) 
+ *    to wake system up.
+ * WAKEUP
+ * 1) Wakeup function starts up the heater and uart threads as is done on system reset. Also needs to reset 
+ *    all GPIOs to their default state
+ * 2) Also toggles POWER_EN to power and start up Pi. 
+ * */
+
+
+// static void wakeupSystem(){
+
+
+// 	return;
+// }
+
+
+// static void shutdownSystem(){
+
+// 	/* Shut down active threads */
+// 	if (activeState == TESTRUNNING){
+// 		k_thread_abort(ia_tid);
+// 	}
+// 	k_thread_abort(heater_tid);
+// 	k_thread_abort(uartIO_tid);
+
+// 	/* Transmit shutdown signal to Pi */
+// 	printk("ZZZ");
+
+// 	/* Wait 30 seconds for shutdown and then stop power. */
+// 	k_msleep(30000);
+// 	gpio_pin_set_dt(&power_enable_low, 1);
+
+// 	/* Go into sleep but maintain power regulators.*/
+
+// 	return;
+// }
+
 
 /**
  * Runs every iteration of data collection to calculate parameters

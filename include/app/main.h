@@ -1,33 +1,27 @@
 #ifndef MAIN_INCLUDE_HEADER
 #define MAIN_INCLUDE_HEADER
 
-
 /* Configuration flags */
-#define HEATER						1
-#define HEATER_USE_PWM				1
 #define ASSEMBLY_TESTING			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
-
 #define AD4002_INSTANCE_1   		DT_ALIAS(ad4002_ch1)
 #define AD4002_INSTANCE_2   		DT_ALIAS(ad4002_ch2)
 #define ADC_SHDN_LOW        		DT_ALIAS(my_adc_shdn_low)
-//#define D0							DT_ALIAS(my_d0)
-//#define D1							DT_ALIAS(my_d1)
 #define TIA1_SHDN_LOW				DT_ALIAS(my_tia1_shdn_low)
 #define TIA2_SHDN_LOW				DT_ALIAS(my_tia2_shdn_low)
 #define TIA3_SHDN_LOW				DT_ALIAS(my_tia3_shdn_low)
 #define TIA4_SHDN_LOW				DT_ALIAS(my_tia4_shdn_low)
 
-#if HEATER_USE_PWM
+#define CHARGE_ENABLE_HIGH			DT_ALIAS(my-charge-enable-high)
+#define POWER_ENABLE_LOW			DT_ALIAS(my-power-enable-low)
+//#define POWER_BUTTON				DT_ALIAS(my-power-button)
+
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define K_P							8 // Ku = 25
 #define K_I							0.1 // Pu = 40 sec
 #define K_D							20 // May not be necessary
-#else
-#define HEATER_EN					DT_ALIAS(my_heater_en)
-#endif
 
 /* Threading Params */
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
@@ -62,6 +56,7 @@
 #define BITS_USED					16
 #define RESOLUTION_MASK				0xFFFF << (ADC_RESOLUTION - BITS_USED) // 0xFFFF is 16 bits, 0xFFFC is 14
 #define MAX_N_MEASUREMENTS			0x1000 // (0x1000 = 4096)
+#define NUM_THERMISTOR_CHANNELS		2
 
 /* Other constants */
 #define PI						 	3.141592654
@@ -152,5 +147,7 @@ static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
+static uint8_t readBatteryLevel(struct adc_sequence* sequence);
+static uint8_t readBatteryLevel_Init();
 
 #endif
