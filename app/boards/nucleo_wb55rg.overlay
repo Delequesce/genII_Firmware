@@ -42,11 +42,11 @@
         };
         charge_enable_high: charge_enable_high {
             gpios = < &gpiob 0x2 0x0 >;
-            label = "Charge Enable Output. Goes LOW to disable battery charging"
+            label = "Charge Enable Output. Goes LOW to disable battery charging";
         };
         power_enable_low: power_enable_low {
             gpios = <&gpiob 0xB 0x0 >;
-            label = "Power Enable. Set LOW by default"
+            label = "Power Enable. Set LOW by default";
         };
     };
 
@@ -79,7 +79,7 @@
 &adc1{
     #address-cells = <1>;
 	#size-cells = <0>;
-    st,adc-clock-source = "ASYNC";
+    st,adc-clock-source = <ASYNC>;
     st,adc-prescaler = <256>;
     clocks = < &rcc 0x4c 0x2000 >, <&rcc STM32_SRC_PCLK ADC_SEL(2)>;
     //vref-mv = <2500>;

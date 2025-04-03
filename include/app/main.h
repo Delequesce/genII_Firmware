@@ -14,8 +14,8 @@
 #define TIA3_SHDN_LOW				DT_ALIAS(my_tia3_shdn_low)
 #define TIA4_SHDN_LOW				DT_ALIAS(my_tia4_shdn_low)
 
-#define CHARGE_ENABLE_HIGH			DT_ALIAS(my-charge-enable-high)
-#define POWER_ENABLE_LOW			DT_ALIAS(my-power-enable-low)
+#define CHARGE_ENABLE_HIGH			DT_ALIAS(my_charge_enable_high)
+#define POWER_ENABLE_LOW			DT_ALIAS(my_power_enable_low)
 //#define POWER_BUTTON				DT_ALIAS(my-power-button)
 
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
@@ -101,6 +101,7 @@ enum testStates {
 	TESTRUNNING,
 	CALIBRATING,
 	EQC,
+	FREERUNNING,
 };
 
 enum heaterStates {

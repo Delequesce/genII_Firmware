@@ -60,11 +60,21 @@ static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
 
 /* Quality Check Structure */
-static const struct impedance_data qcData[4] = {
-	{.C = 46.5, .G = 5.57}, 
-	{.C = 101.5, .G = 2.57},
-	{.C = 230.0, .G = 10.05}, 
-	{.C = 324.6, .G = 5.02}, 
+// Rev 2
+// static const struct impedance_data qcData[4] = {
+// 	{.C = 46.5, .G = 5.57}, 
+// 	{.C = 101.5, .G = 2.57},
+// 	{.C = 230.0, .G = 10.05}, 
+// 	{.C = 324.6, .G = 5.02}, 
+// };
+
+// Rev 3
+static const struct impedance_data qcData[5][4] = {
+	{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
+	{{.C = 48.0, .G = 6.688}, {.C = 98.8, .G = 2.570}, {.C = 229.9, .G = 10.080}, {.C = 326.6, .G = 6.686}},
+	{{.C = 47.2, .G = 6.689}, {.C = 99.4, .G = 2.571}, {.C = 230.0, .G = 10.037}, {.C = 319.5, .G = 6.691}},
+	{{.C = 47.2, .G = 6.692}, {.C = 100.1, .G = 2.572}, {.C = 224.9, .G = 10.033}, {.C = 324.3, .G = 6.683}},
+	{{.C = 46.7, .G = 6.689}, {.C = 227.6, .G = 10.040}, {.C = 100.6, .G = 2.572}, {.C = 322.6, .G = 6.691}},
 };
 
 /* Threads */
@@ -370,6 +380,14 @@ static void uartIOThread_entry_point(){
 										&eqc_cfg, NULL, NULL, 
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
+					case 'F': // Debugging System
+						activeState = FREERUNNING;
+						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
+										K_THREAD_STACK_SIZEOF(IA_stack_area),
+										testThread_entry_point, 
+										NULL, NULL, NULL, 
+										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+						break;
 				}
 				else{
 					case 'X': // Stop Test
@@ -554,7 +572,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 
 	/* Begin Measurement */
-	const uint16_t N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
+	uint16_t N_Measurements;
+	if(test_cfg){
+		N_Measurements = (uint16_t)(test_cfg->runTime / test_cfg->collectionInterval);
+	}
 	uint16_t i, j, c;
 	uint16_t n;
 	const float w0 = W0;//2*PI*(1-DEFAULT_SPOT_FREQUENCY/CONVERT_FREQUENCY); 
@@ -607,6 +628,35 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
 
+	/* Set to continuous run if FREERUNNING enabled for debugging */
+	if (activeState == FREERUNNING){
+		printk("Now Entering Free Run Debug Mode\n");
+		/* Set Channel 1 to always on */
+		c = 0;
+		if (gpio_pin_configure_dt(&tia_1_shdn_low, tia_shdn_states[c+3]) < 0 || 
+				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
+				gpio_pin_configure_dt(&tia_3_shdn_low, tia_shdn_states[c+1]) < 0 ||
+				gpio_pin_configure_dt(&tia_4_shdn_low, tia_shdn_states[c]) < 0) {
+				printk("ETIA Multiplexing Error");
+				return 0;
+			}
+
+		while(true){
+
+			/* Read Data from ADC */
+			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+			k_msleep(2); // Thread sleeps until DMA callback is triggered
+
+			//t2 = k_uptime_get();
+			/* Copy data to safe memory location */ 
+			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+			k_msleep(1);
+
+		}
+		return;
+	}
+
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
 
@@ -621,8 +671,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				continue;
 			}
 
-			/* Set Active Channel */
-            
 			/* Set Active Channel by setting shdn pins */
 			if (gpio_pin_configure_dt(&tia_1_shdn_low, tia_shdn_states[c+3]) < 0 || 
 				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
@@ -749,13 +797,32 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	/* Perform additional calibration steps, if necessary */
 	if(activeState == CALIBRATING){
-		const float test_Z_real = 179.636;
-		const float test_Z_imag = 0.043;
+		// Rev 2
+		//const float test_Z_real = 179.636; 
+		//const float test_Z_imag = 0.043; 
+		// Rev 3
+		const float test_Z_real = 149.477; 
+		const float test_Z_imag = 0.070;
+
+		const float expected_calib_real = 63;
+		const float expected_calib_imag = 20;
+
+		float div_temp_real;
+		float div_temp_imag;
+
+		/* Read current calibration values as reference */
+		flash_read(flash_device, PAGE200, &calibMat, 32);
 
 		for(c=0; c<4; c++){
 			if (test_cfg->channelOn[c]){
-				calibMat[c].Zfb_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
-				calibMat[c].Zfb_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
+				div_temp_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
+				div_temp_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
+
+				/* Check if it matches what is expected before storing */
+				if (fabs(div_temp_real - expected_calib_real) < 5 && fabs(div_temp_imag - expected_calib_imag) < 30){
+					calibMat[c].Zfb_real = div_temp_real;
+					calibMat[c].Zfb_imag = div_temp_imag;
+				}
 			}
 		}
 
@@ -773,6 +840,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 	/* Compare qcData struct to average of testDataMat */
 	else if(activeState == EQC){
+		uint8_t qcIndex = 2;
 		float C_sum[4] = {0};
 		float G_sum[4] = {0};
 		float C_var[4] = {0};
@@ -788,8 +856,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			C_sum[c] = C_sum[c] * 0.0333333f; 
 			G_sum[c] = G_sum[c] * 0.0333333f;
 
-			rmsd_noise[0].C += pow(qcData[c].C - C_sum[c], 2);
-			rmsd_noise[0].G += pow(qcData[c].G - G_sum[c], 2);
+			rmsd_noise[0].C += pow(qcData[qcIndex][c].C - C_sum[c], 2);
+			rmsd_noise[0].G += pow(qcData[qcIndex][c].G - G_sum[c], 2);
 		}
 		// Get Standard Deviation (noise)
 		for(c = 0; c < 4; c++){
