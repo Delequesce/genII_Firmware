@@ -79,7 +79,7 @@
 &adc1{
     #address-cells = <1>;
 	#size-cells = <0>;
-    st,adc-clock-source = <ASYNC>;
+    st,adc-clock-source = "ASYNC";
     st,adc-prescaler = <256>;
     clocks = < &rcc 0x4c 0x2000 >, <&rcc STM32_SRC_PCLK ADC_SEL(2)>;
     //vref-mv = <2500>;

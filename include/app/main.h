@@ -114,6 +114,7 @@ struct test_config{
 	uint8_t collectionInterval; // Interval in seconds between measurements
 	uint8_t incubationTemp; // Incubation Temperature 
 	bool channelOn[4]; // Boolean array indicating which channels are active
+	uint8_t boardNumber;
 };
 
 struct calibration_data{

@@ -28,6 +28,7 @@ static struct test_config test_cfg = {
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
 	.channelOn = {1, 1, 1, 1}, // Change to set default active channels
+	.boardNumber = NULL,
 };
 
 /* Load with default values */
@@ -154,7 +155,6 @@ void uart_rx_isr(const struct device *dev, void *user_data){
 		}
 		/* else: characters beyond buffer size are dropped */
 	}
-
 }
 
 
@@ -359,7 +359,12 @@ static void uartIOThread_entry_point(){
 							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 							.incubationTemp = 0,
 							.channelOn = {1, 1, 1, 1},
+							.boardNumber = p_char[1] - 48,
 						};
+
+						// Respond positively
+						uart_poll_out(uart_dev, 'K');
+
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
 										testThread_entry_point, 
@@ -373,7 +378,12 @@ static void uartIOThread_entry_point(){
 							.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 							.incubationTemp = 0,
 							.channelOn = {1, 1, 1, 1},
+							.boardNumber = p_char[1] - 48,
 						};
+
+						// Respond positively
+						uart_poll_out(uart_dev, 'K');
+
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
 										testThread_entry_point, 
@@ -388,6 +398,13 @@ static void uartIOThread_entry_point(){
 										NULL, NULL, NULL, 
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
+					case 'Y': // Disconnect
+						uart_poll_out(uart_dev, 'K');
+						deviceConnected = false;
+						break;
+					default:
+						// Respond negatively
+						uart_poll_out(uart_dev, 'V');
 				}
 				else{
 					case 'X': // Stop Test
@@ -840,7 +857,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 	/* Compare qcData struct to average of testDataMat */
 	else if(activeState == EQC){
-		uint8_t qcIndex = 2;
+		uint8_t qcIndex = test_cfg->boardNumber; // Get Board Number Entered by user from GUI
 		float C_sum[4] = {0};
 		float G_sum[4] = {0};
 		float C_var[4] = {0};
@@ -877,6 +894,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 		// Write to User
 		uart_write_32f(&rmsd_noise, 4, 'Q');
+
+		// Return
+		activeState = IDLE;
+		return;
 	}
 	else{
 		/* Store Test Data in Flash */
@@ -950,8 +971,15 @@ static float readTemp(struct adc_sequence* sequence){
 	int err;
 	int16_t* val_mv_ptr;
 	int32_t val_mv;
-	float m_temp = 0.0349;
-	float b_temp = -13.4;
+
+	/* Chip Thermistors (R25 = 2000, B = 3250, R = 1000)*/
+	//float m_temp = 0.0349;
+	//float b_temp = -13.4;
+
+	/* Axial Thermistors (R25 = 10000, B = 3950, R = 8000)*/
+	float m_temp = 0.0287;
+	float b_temp = -17.8;
+
 	float channel_temps_local[NUM_THERMISTORS];
 	channel_temps_local[0] = 0;
 	float tempAvg[5] = {0, 0, 0, 0, 0};
