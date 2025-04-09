@@ -16,7 +16,7 @@
 
 #define CHARGE_ENABLE_HIGH			DT_ALIAS(my_charge_enable_high)
 #define POWER_ENABLE_LOW			DT_ALIAS(my_power_enable_low)
-//#define POWER_BUTTON				DT_ALIAS(my-power-button)
+#define POWER_BUTTON				DT_ALIAS(my_power_button)
 
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define K_P							8 // Ku = 25
@@ -102,6 +102,7 @@ enum testStates {
 	CALIBRATING,
 	EQC,
 	FREERUNNING,
+	SHUTDOWN,
 };
 
 enum heaterStates {
@@ -151,5 +152,8 @@ static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
 static uint8_t readBatteryLevel(struct adc_sequence* sequence);
 static uint8_t readBatteryLevel_Init();
+static void wakeupSystem();
+static void shutdownSystem();
+static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 
 #endif

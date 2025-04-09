@@ -45,8 +45,18 @@
             label = "Charge Enable Output. Goes LOW to disable battery charging";
         };
         power_enable_low: power_enable_low {
-            gpios = <&gpiob 0xB 0x0 >;
+            gpios = <&gpiob 0xB (GPIO_OPEN_DRAIN)>;
             label = "Power Enable. Set LOW by default";
+        };
+    };
+
+    buttons: buttons {
+        /* This compatible driver implements button debouncing */
+        compatible = "gpio-keys";
+        powerbutton: powerbutton {
+            gpios = <&gpioc 0x5 (GPIO_PULL_UP)>;
+            label = "Power Button";
+            zephyr,code = <INPUT_KEY_0>;
         };
     };
 
@@ -59,7 +69,7 @@
         my-tia4-shdn-low = &tia_4_shdn_low;
         my-charge-enable-high = &charge_enable_high;
         my-power-enable-low = &power_enable_low;
-        //my-power-button = &-----
+        my-power-button = &powerbutton;
 
         my-heaterpwm = &heaterPwm;
         ad4002-ch1 = &ad4002_1;

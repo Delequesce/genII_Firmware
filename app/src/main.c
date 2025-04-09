@@ -102,7 +102,10 @@ static const struct gpio_dt_spec tia_3_shdn_low = GPIO_DT_SPEC_GET(TIA3_SHDN_LOW
 static const struct gpio_dt_spec tia_4_shdn_low = GPIO_DT_SPEC_GET(TIA4_SHDN_LOW, gpios);
 static const struct gpio_dt_spec charge_enable_high = GPIO_DT_SPEC_GET(CHARGE_ENABLE_HIGH, gpios);
 static const struct gpio_dt_spec power_enable_low = GPIO_DT_SPEC_GET(POWER_ENABLE_LOW, gpios);
-//static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET_OR(POWER_BUTTON, gpios, {0});
+static const struct gpio_dt_spec power_button = GPIO_DT_SPEC_GET(POWER_BUTTON, gpios);
+
+// Necessary structure for button interrupt handler
+static struct gpio_callback button_cb_data;
 
 // Heater Options
 static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
@@ -233,19 +236,31 @@ int main(){
 		printk("ECannot enable power input to Pi.");
 		return 0;
 	}
-
-	/*
-	ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
-	if (ret != 0) {
-	printk("Error %d: failed to configure interrupt on %s pin %d\n",
-	ret, button.port->name, button.pin);
-	return 0;
+	
+	/* Set up power button behavior */
+	ret = gpio_is_ready_dt(&power_button);
+	if (!ret){
+		printk("Error: button device is not ready\n");
 	}
-
-	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
-	gpio_add_callback(button.port, &button_cb_data);
-	*/
-
+	if(ret){
+		ret = gpio_pin_configure_dt(&power_button, GPIO_INPUT);
+		if(ret != 0){
+			printk("EFailed to configure button as input\n");
+		}
+	}
+	if(!ret){
+		ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
+		if (ret != 0) {
+			printk("Error %d: failed to configure interrupt on %s pin %d\n",
+			ret, power_button.port->name, power_button.pin);
+		}
+	}
+	if(!ret){
+		gpio_init_callback(&button_cb_data, button_pressed, BIT(power_button.pin));
+		gpio_add_callback(power_button.port, &button_cb_data);
+		printk("Button Initialized!");
+	}
+	
 	/*
 	if (readBatteryLevel_Init() < 0){
 		printk("EBattery Reading Initialization Failure. Cannot read battery voltages");
@@ -1119,33 +1134,52 @@ static uint8_t readBatteryLevel(struct adc_sequence* sequence){
  * */
 
 
-// static void wakeupSystem(){
+static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
+	/* Either shutdown or wakeup system */
+	printk("Button Pressed\n");
+	if (activeState == SHUTDOWN){
+		wakeupSystem();
+	}
+	else{
+		shutdownSystem();
+	}
+}
+
+static void wakeupSystem(){
+	printk("Waking up system\n");
+	activeState = IDLE;
+	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_INACTIVE) < 0){
+		printk("Error Re-enabling Power");
+	}
+	
+	return;
+}
 
 
-// 	return;
-// }
+static void shutdownSystem(){
 
+	/* Shut down active threads */
+	if (activeState == TESTRUNNING){
+		k_thread_abort(ia_tid);
+	}
+	k_thread_abort(heater_tid);
+	//k_thread_abort(uartIO_tid);
 
-// static void shutdownSystem(){
+	/* Transmit shutdown signal to Pi */
+	printk("Shutting down System\n");
+	printk("ZZZZ");
 
-// 	/* Shut down active threads */
-// 	if (activeState == TESTRUNNING){
-// 		k_thread_abort(ia_tid);
-// 	}
-// 	k_thread_abort(heater_tid);
-// 	k_thread_abort(uartIO_tid);
+	/* Wait 30 seconds for shutdown and then stop power. */
+	//k_msleep(30000);
+	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_ACTIVE) < 0){
+		printk("Error Disabling Power");
+	}
 
-// 	/* Transmit shutdown signal to Pi */
-// 	printk("ZZZ");
+	/* Go into sleep but maintain power regulators.*/
+	activeState = SHUTDOWN;
 
-// 	/* Wait 30 seconds for shutdown and then stop power. */
-// 	k_msleep(30000);
-// 	gpio_pin_set_dt(&power_enable_low, 1);
-
-// 	/* Go into sleep but maintain power regulators.*/
-
-// 	return;
-// }
+	return;
+}
 
 
 /**
