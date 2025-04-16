@@ -3,6 +3,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/device.h>
+#include <zephyr/input/input.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/clock_control.h>
@@ -17,9 +18,10 @@
 #include <string.h>
 #include <app/main.h>
 #include <app/circularbuffer.h>
+#include <zephyr/dt-bindings/gpio/stm32-gpio.h>
+#include <zephyr/sys/poweroff.h>
 
 /* Default States */
-
 enum testStates activeState = IDLE;
 enum heaterStates heaterState = NOT_HEATING; 
 
@@ -28,7 +30,7 @@ static struct test_config test_cfg = {
 	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
 	.channelOn = {1, 1, 1, 1}, // Change to set default active channels
-	.boardNumber = NULL,
+	.boardNumber = 0,
 };
 
 /* Load with default values */
@@ -51,25 +53,15 @@ static const uint32_t tia_shdn_states[7] = {
 static const uint8_t capacityArray[11] = {100, 94, 85, 75, 62, 53, 40, 22, 13, 3, 0};
 //static const uint8_t voltageArray[11] = {4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, }
 
-/* Function forward Declaration */
-static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData, uint8_t* flags);
+/* Function forward Declarations */
+static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data,
+	struct outputParams* opData, struct calcParamsVars* cpv_local, uint8_t* flags);
 
 /* Main data structure */
 static struct impedance_data testDataMat[DEFAULT_EQC_TIME][4] = {{0}};
-static struct impedance_data testDataMat_lite[4] = {0};
 static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
 
-/* Quality Check Structure */
-// Rev 2
-// static const struct impedance_data qcData[4] = {
-// 	{.C = 46.5, .G = 5.57}, 
-// 	{.C = 101.5, .G = 2.57},
-// 	{.C = 230.0, .G = 10.05}, 
-// 	{.C = 324.6, .G = 5.02}, 
-// };
-
-// Rev 3
 static const struct impedance_data qcData[5][4] = {
 	{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
 	{{.C = 48.0, .G = 6.688}, {.C = 98.8, .G = 2.570}, {.C = 229.9, .G = 10.080}, {.C = 326.6, .G = 6.686}},
@@ -80,10 +72,15 @@ static const struct impedance_data qcData[5][4] = {
 
 /* Threads */
 k_tid_t ia_tid; // IA Measurement Thread
+k_tid_t heater_tid;
+k_tid_t uartio_tid;
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
-K_THREAD_DEFINE(heater_tid, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
-K_THREAD_DEFINE(uartIO_tid, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
+struct k_thread uartio_thread_data;
+K_THREAD_STACK_DEFINE(heater_stack_area, HEATER_STACK_SIZE);
+//K_THREAD_DEFINE(heater_tid, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
+K_THREAD_STACK_DEFINE(uartio_stack_area, UARTIO_STACK_SIZE);
+//K_THREAD_DEFINE(uartIO_tid, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
 
 /* Message and work queue */
@@ -106,6 +103,8 @@ static const struct gpio_dt_spec power_button = GPIO_DT_SPEC_GET(POWER_BUTTON, g
 
 // Necessary structure for button interrupt handler
 static struct gpio_callback button_cb_data;
+
+//INPUT_CALLBACK_DEFINE(NULL, input_cb, NULL);
 
 // Heater Options
 static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
@@ -258,7 +257,7 @@ int main(){
 	if(!ret){
 		gpio_init_callback(&button_cb_data, button_pressed, BIT(power_button.pin));
 		gpio_add_callback(power_button.port, &button_cb_data);
-		printk("Button Initialized!");
+		//printk("Button Initialized!");
 	}
 	
 	/*
@@ -268,6 +267,37 @@ int main(){
 	*/
 
 	//k_yield();
+
+	// Create Heater and Uart Threads
+	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
+		K_THREAD_STACK_SIZEOF(heater_stack_area),
+		heaterThread_entry_point, 
+		NULL, NULL, NULL, 
+		HEATER_THREAD_PRIORITY, 0, K_NO_WAIT);
+
+	uartio_tid = k_thread_create(&uartio_thread_data, uartio_stack_area,
+		K_THREAD_STACK_SIZEOF(uartio_stack_area),
+		uartIOThread_entry_point, 
+		NULL, NULL, NULL, 
+		UARTIO_THREAD_PRIORITY, 0, K_NO_WAIT);
+
+	
+	/* Run Loop to check for flag set by shutdown handler */
+	/* We need to disable and re-enable GPIO interrupts to avoid triggering back to back wakeup and shutdowns*/
+	for (;;){
+		if (activeState == SHUTTINGDOWN){
+			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_DISABLE);
+			shutdownSystem();
+			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
+		}
+		if (activeState ==  WAKINGUP){
+			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_DISABLE);
+			wakeupSystem();
+			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
+		}
+		/* Sleep to allow heater, uart, and IA threads to operate */
+		k_msleep(500);
+	}
 
 	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
 }
@@ -330,7 +360,8 @@ static void uartIOThread_entry_point(){
 			switch(p_char[0]) {
 				if (activeState == IDLE){
 					case 'C': // Connect to Device
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
+						//deviceConnected = false;
 						deviceConnected = true;
 						break;
 					case 'S': // Alter Test Configuration Structure, convert from ascii encoding
@@ -339,7 +370,7 @@ static void uartIOThread_entry_point(){
 						test_cfg.incubationTemp = 10 * p_char[6] + p_char[7] - 528;
 						//test_cfg.channels
 						// Respond positively
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
 						break;
 					case 'L':
 						test_cfg.channelOn[0] = p_char[1] & 0x1;
@@ -355,6 +386,9 @@ static void uartIOThread_entry_point(){
 										testThread_entry_point, 
 										&test_cfg, NULL, NULL, 
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
+
+						// Respond Positively
+						uart_write_singleChar('K', true);
 						break;
 					case 'H': // Toggle Heater
 						/* Toggle global parameter for heater thread to observe */
@@ -365,7 +399,7 @@ static void uartIOThread_entry_point(){
 							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 						}
 						// Acknowledge Request
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
 						break;
 					case 'B': // Calibrate System
 						activeState = CALIBRATING;
@@ -378,7 +412,7 @@ static void uartIOThread_entry_point(){
 						};
 
 						// Respond positively
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
 
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
@@ -397,7 +431,7 @@ static void uartIOThread_entry_point(){
 						};
 
 						// Respond positively
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
 
 						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
 										K_THREAD_STACK_SIZEOF(IA_stack_area),
@@ -414,19 +448,20 @@ static void uartIOThread_entry_point(){
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
 					case 'Y': // Disconnect
-						uart_poll_out(uart_dev, 'K');
+						uart_write_singleChar('K', true);
 						deviceConnected = false;
 						break;
 					default:
 						// Respond negatively
-						uart_poll_out(uart_dev, 'V');
+						uart_write_singleChar('V', true);
 				}
 				else{
 					case 'X': // Stop Test
 						if (stopTest() < 0){
 							break;
 						}
-						uart_poll_out(uart_dev, 'X');
+						// Acknowledge
+						uart_write_singleChar('K', true);
 						break;
 				}
 			}
@@ -592,6 +627,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
     static uint16_t Vr_data[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
 	static uint16_t Ve_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data  
     static uint16_t Vr_data_safe[SAMPLES_PER_COLLECTION]; // Memory allocation for ADC RX Data 
+
+	static struct impedance_data testDataMat_lite[4] = {0};
+
 	/*for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
         *(Ve_data + n) = 1;
         *(Vr_data + n) = 1;
@@ -622,24 +660,35 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float prev_prev_value_Vr, prev_prev_value_Ve;
 	float current_value_Vr, current_value_Ve;
 
-	/* Output Parameter Structure */
-	static struct outputParams opData = {
+	/* For Parameter Calculations */
+	static struct outputParams opData[N_CHANNELS_MAX] = {{
 		.tPeak = 0,
 		.deltaEps = 0,
 		.deltaEpsTime = 0,
 		.smax = 0,
 		.smaxTime = 0,
-	};
+	}};
+
+	static struct calcParamsVars cpv[N_CHANNELS_MAX] = {{
+		.prevX = 0,
+		.C_max = 0,
+		.x_ma = 0,
+		.slp = 0,
+	}};
+
+	static struct dataWriteStruct dwStruct[N_CHANNELS_MAX];
+
+	static float ma_buf0[MA_BUF_N];
+    static float ma_buf1[MA_BUF_N];
+    static float ma_buf2[MA_BUF_N];
+    static float ma_buf3[MA_BUF_N];
+	static circular_buf_t cbt[N_CHANNELS_MAX] = {{.buffer = ma_buf0}, {.buffer = ma_buf1}, {.buffer = ma_buf2}, {.buffer = ma_buf3}};
+    for(i = 0; i < N_CHANNELS_MAX; i++){
+	    circular_buffer_init(&cbt[i], MA_BUF_N);
+    }
+    uint8_t flags[N_CHANNELS_MAX] = {0};
 
 	unsigned char a_char;
-
-	// For param calculation
-	static float ma_buf[MA_BUF_N];
-	static circular_buf_t cbt = {
-        .buffer = ma_buf,
-    };
-	circular_buffer_init(&cbt, MA_BUF_N);
-	uint8_t flags = 0;
 
 
 	/* Configure TIA SHDNs */
@@ -652,9 +701,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 
 	/* Sets up necessary peripherals (DMA, SPI, Timers) for reads. */
+	#if USE_REAL_DATA
 	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
 	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
-
+	#endif
 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	/* Timing Parameters */
@@ -676,6 +726,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		while(true){
 
 			/* Read Data from ADC */
+			#if USE_REAL_DATA
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
@@ -684,6 +735,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
 			k_msleep(1);
+			#endif
 
 		}
 		return;
@@ -696,7 +748,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		//t1 = k_uptime_get();
 
 		/* Run Loop for Each Channel */
-		for(c = 0; c < 4; c++){
+		for(c = 0; c < N_CHANNELS_MAX; c++){
 			
 			/* If channel is not active, skip collection */
 			if(!test_cfg->channelOn[c]){
@@ -713,6 +765,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			}
 
 			/* Perform Initial Read */
+			#if USE_REAL_DATA
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
@@ -773,7 +826,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			/* Apply small real and imaginary Z Offsets */
 			Z_real += Z_OFF_REAL;
 			Z_imag += Z_OFF_IMAG;
-
+			
 			/* Update calibration moving average */
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
@@ -793,33 +846,51 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				{
 					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-				}
+					/* Function to calculate Output Parameters and moving average */
+					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+					testDataMat_lite[c].C = cpv[c].x_ma;
 
+					/* Package into single data structure */
+					dwStruct[c].impDat = testDataMat_lite[c];
+					dwStruct[c].opDat = opData[c];
+				}
 			}
+			#else 
+
+			k_msleep(100);
+
+			/* Code to execute if using fake data saved to MCU memory*/
+			testDataMat_lite[c].G = 0;
+			testDataMat_lite[c].C = CDataFake[i][c];
+
+			calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+					testDataMat_lite[c].C = cpv[c].x_ma;
+
+			/* Package into single data structure */
+			dwStruct[c].impDat = testDataMat_lite[c];
+			dwStruct[c].opDat = opData[c];
+
+			#endif
 		}
 
 		/* Send data over uart */
 		if (activeState == TESTRUNNING){
-			uart_write_32f(&testDataMat_lite[0], 8, 'D');
 
-			// Pass data to a helper function that calculates a moving average and determines if parameters can be extracted
-			calculateParameters(&cbt, i, testDataMat_lite[0].C, &opData, &flags);
-			uart_write_32f(&opData, 5, 'O');
+			/* Total write at 115200 baud should take 8-10 msec */
+			uart_write_32f(&dwStruct[0], 28, 'D');
 
-			//uart_write_32f(&testDataMat[i][0], 2, 'D');
-			//uart_poll_out(uart_dev, 'L');
-		//printk("E%lli\n", timeStamp);
-		}
-		else{
-			//printk("ECalibrating\n");
 		}
 
 		//ad4002_shutdown(ad4002_master);
 		/* Collection timestamp */
+		#if REAL_TIME
 		timeStamp = k_uptime_get() - startTime;
 
 		/* Sleep until next collection period */
 		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp;
+		#else
+		sleepTime = 300;
+		#endif
 		
 		k_msleep(sleepTime); // Usually around 270 msec
 		//t2 = k_uptime_get();
@@ -920,9 +991,18 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	}
 
+	/* Tell UI that test has completed */
 	activeState = IDLE;
-	printk("X\n");
+	uart_write_singleChar('X', true);
 	return; 
+}
+
+static void uart_write_singleChar(char character, bool useLF){
+	uart_poll_out(uart_dev, character);
+	if(useLF){
+		uart_poll_out(uart_dev, '\n');
+	}
+	return;
 }
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
@@ -1134,52 +1214,101 @@ static uint8_t readBatteryLevel(struct adc_sequence* sequence){
  * */
 
 
+/* Called from interrupt handler. Cannot sleep because not backed by execution thread */
 static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
 	/* Either shutdown or wakeup system */
-	printk("Button Pressed\n");
-	if (activeState == SHUTDOWN){
-		wakeupSystem();
+	//printk("Button Pressed\n");
+	if (activeState == POWEREDOFF){
+		activeState = WAKINGUP;
+		return;
 	}
-	else{
-		shutdownSystem();
+	if (activeState == WAKINGUP){
+		return;
 	}
+	/* Default case */
+	activeState = SHUTTINGDOWN;
+	return;
 }
 
 static void wakeupSystem(){
-	printk("Waking up system\n");
-	activeState = IDLE;
+	printk("ZWaking up system\n");
 	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_INACTIVE) < 0){
 		printk("Error Re-enabling Power");
+		return;
 	}
+
+	/* Need to re=initialize system as if it was booting from the beginning */
+
+	/* Create Default Threads */
+	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
+		K_THREAD_STACK_SIZEOF(heater_stack_area),
+		heaterThread_entry_point, 
+		NULL, NULL, NULL, 
+		HEATER_THREAD_PRIORITY, 0, K_NO_WAIT);
+		
+	uartio_tid = k_thread_create(&uartio_thread_data, uartio_stack_area,
+		K_THREAD_STACK_SIZEOF(uartio_stack_area),
+		uartIOThread_entry_point, 
+		NULL, NULL, NULL, 
+		UARTIO_THREAD_PRIORITY, 0, K_NO_WAIT);
 	
+	activeState = IDLE;
+	heaterState = NOT_HEATING;
 	return;
 }
 
 
 static void shutdownSystem(){
+	/* Transmit shutdown signal to Pi */
+	printk("ZShutting down System\n");
+	printk("ZZZZ\n");
+
+	/* Wait 15 seconds for shutdown and then stop power. */
+	k_busy_wait(POWER_OFF_TIME_MS);
 
 	/* Shut down active threads */
 	if (activeState == TESTRUNNING){
 		k_thread_abort(ia_tid);
+		activeState = IDLE;
 	}
 	k_thread_abort(heater_tid);
-	//k_thread_abort(uartIO_tid);
+	k_thread_abort(uartio_tid);
 
-	/* Transmit shutdown signal to Pi */
-	printk("Shutting down System\n");
-	printk("ZZZZ");
-
-	/* Wait 30 seconds for shutdown and then stop power. */
-	//k_msleep(30000);
 	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_ACTIVE) < 0){
 		printk("Error Disabling Power");
+		activeState = IDLE;
+		return;
 	}
 
+	/* Configure button interrupt as wakeup source */
+	//gpio_pin_configure_dt(&power_button, STM32_GPIO_WKUP);
+
 	/* Go into sleep but maintain power regulators.*/
-	activeState = SHUTDOWN;
+	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
+	deviceConnected = false;
+
+	/* Actual system poweroff. */
+	printk("System powered down\n");
+	//sys_poweroff();
+	activeState = POWEREDOFF;
 
 	return;
 }
+
+// static void input_cb(struct input_event *evt, void *user_data){
+// 	ARG_UNUSED(user_data);
+// 	switch (evt->code){
+// 		case INPUT_KEY_A:
+// 			printk("Short Press");
+// 			break;
+// 		case INPUT_KEY_X:
+// 			printk("Long Press");
+// 			break;
+// 		default:
+// 			printk("Unknown Event");
+// 			return;
+// 	}
+// }
 
 
 /**
@@ -1187,22 +1316,16 @@ static void shutdownSystem(){
  * flags is [slp_flag, tPeakFound, deltaEpsFound, smaxFound]
  * */
 
-static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData, uint8_t* flags)
+static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData_local, struct calcParamsVars* cpv_local, uint8_t* flags)
 {
-	// Static variables (initialized to zero automatically, updated during calls so no need to reset)
-    static float x_ma;
-    static float prevX;
-    static float slp;
-    static float C_max;
-
 	// Add incoming data to moving average window
 	circular_buffer_put(cbt, data);
-	x_ma = circular_buffer_avg(cbt);
+	cpv_local->x_ma = circular_buffer_avg(cbt);
 
-
+	/* Not sure if necessary */
 	if(n < 1)
 	{
-		prevX = 0;
+		cpv_local->prevX = 0;
 
 	}
 
@@ -1210,32 +1333,32 @@ static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, str
 	if (n < EARLIEST_PEAK_TIME){
 		return;
 	}
-	
-	slp = x_ma - prevX;
-	prevX = x_ma;
-	
-	
+
+	cpv_local->slp = cpv_local->x_ma - cpv_local->prevX;
+	cpv_local->prevX = cpv_local->x_ma;
+
+
 	/* Tpeak */
 	if(!PEAKFOUND(flags)){
-		if(!SLPFLAG(flags) && slp > 0){
+		if(!SLPFLAG(flags) && cpv_local->slp > 0){
 			(*flags) ^= SLPFLAG_I;
 			return;
 		}
 		
-		if(slp < 0 && opData->tPeak == 0)
+		if(cpv_local->slp < 0 && opData_local->tPeak == 0)
 		{
 			// Local or Absolute Maximum
-			opData->tPeak = n;
-			C_max = data;
+			opData_local->tPeak = n;
+			cpv_local->C_max = data;
 			return;
 		}
 
 		// Determine if max is local or absolute
-		if(data > C_max)
+		if(data > cpv_local->C_max)
 		{
 			// Can't be a maximum, reset tpeak and Cmax
-			opData->tPeak = 0;
-			C_max = 0;
+			opData_local->tPeak = 0;
+			cpv_local->C_max = 0;
 			return;
 		}
 		(*flags) ^= PEAKFOUND_I;
@@ -1246,26 +1369,26 @@ static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, str
 	if(!SMAXFOUND(flags))
 	{
 		//printf("%d: slp = %0.8f\t smax = %0.8f\t", n, slp, smax);
-		if(slp < opData->smax){
-			opData->smax = slp;
-			opData->smaxTime = n;
+		if(cpv_local->slp < opData_local->smax){
+			opData_local->smax = cpv_local->slp;
+			opData_local->smaxTime = n;
 		}
 	}
-	
+
 	/* Delta Epsilon (Un-normalized)*/
 	if(!DELTAEPSFOUND(flags)){
 		// Wait until value has fallen significantly from the peak
-		if(x_ma > C_max * FALL_THRESH){
+		if(cpv_local->x_ma > cpv_local->C_max * FALL_THRESH){
 			return;
 		}
-		if(slp > SLOPE_THRESH*C_max)
+		if(cpv_local->slp > SLOPE_THRESH*cpv_local->C_max)
 		{
-			opData->deltaEps = data/C_max;
-			opData->deltaEpsTime = n;
+			opData_local->deltaEps = 1-(data/cpv_local->C_max);
+			opData_local->deltaEpsTime = n;
 			(*flags) ^= DELTAEPSFOUND_I;
 			//printf("Delta Eps Found at t = %d sec, %0.4f\n", opData->deltaEpsTime, opData->deltaEps);
 
-			opData->smax = opData->smax/C_max;
+			opData_local->smax = opData_local->smax/cpv_local->C_max;
 			(*flags) ^= SMAXFOUND_I;
 			//printf("Smax Found at t = %d sec, %0.6f\n", opData->smaxTime, opData->smax);
 

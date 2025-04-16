@@ -60,6 +60,15 @@
         };
     };
 
+    // longpress {
+    //         input = <&buttons>;
+    //         compatible = "zephyr,input-longpress";
+    //         input-codes = <INPUT_KEY_0>;
+    //         short-codes = <INPUT_KEY_A>;
+    //         long-codes = <INPUT_KEY_X>;
+    //         long-delay-ms = <1000>;
+    // };
+
     aliases {
         my-ccdrive = &ccDrive;
         my-adc-shdn-low = &adc_shdn_low;
