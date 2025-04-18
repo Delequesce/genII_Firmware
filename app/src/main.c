@@ -522,6 +522,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	float prevTempAvg = 0;
 	float prevCCTemp = 0;
 	bool heater_on_off = false; 
+	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	//static bool heatFlag = 0;
 
@@ -532,7 +533,11 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	prevCCTemp = tempAvg;
 	uint8_t tempWriteFlag = 0;
 
+	int64_t startTime = k_uptime_get();
+
 	while(1){
+		
+		/* This operation takes around 400 msec */
 		tempAvg = readTemp(&sequence);
 
 		/* Update estimate of ClotChip Temperature based on rate of change */
@@ -557,9 +562,9 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		if(heaterState == HEATING){
 			
 			/* PID */
-			if (tempAvg < 20){
+			if (tempAvg < 32){
 				heater_errI = 0;
-				pulse_cycles = V_SIG_PERIOD;
+				pulse_cycles = 0;
 			}
 			else{
 				/* Find PID errors and calculate output duty cycle */
@@ -567,18 +572,23 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 				heater_errI = heater_errI + heater_errP;
 				heater_errD = prevTempAvg - tempAvg;
 				prevTempAvg = tempAvg;
+
+				#if CHIP_HEATER
 				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1-(K_P * heater_errP + K_I * heater_errI + K_D * heater_errD)*0.01));
+				#else
+				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1- 0.01*K_C*(heater_errP + K_I * heater_errI)));
+				#endif
 				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
 				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
 			}
-
+			//printk("%0.2f,%d,%0.2f,%0.2f\n", tempAvg, pulse_cycles, K_C*heater_errP, K_C * K_I* heater_errI);
 			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
 				printk("EError: Failed to set heater pulse");
 				return -1;
 			}
 
-			char int_buffer[9];
-			sprintf(int_buffer, "%lu", pulse_cycles);
+			//char int_buffer[9];
+			//sprintf(int_buffer, "%lu", pulse_cycles);
 
 			//Optional Print Pulse Cycles
 			/*uart_poll_out(uart_dev, 'E');
@@ -592,7 +602,11 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		}
 
 		/* Schedule new reading every second and let other threads run */
-		k_msleep(1000);
+		timeStamp = k_uptime_get() - startTime;
+		//printk("Timestamp: %lld", timeStamp);
+		sleepTime = TEMP_COLLECTION_INTERVAL * 1000*(count+1) - timeStamp;
+		count++;
+		k_msleep(sleepTime);
 	}
 	return;
 }
@@ -1074,11 +1088,13 @@ static float readTemp(struct adc_sequence* sequence){
 	/* Axial Thermistors (R25 = 10000, B = 3950, R = 8000)*/
 	float m_temp = 0.0287;
 	float b_temp = -17.8;
-
+	//int64_t start_time = k_uptime_get();
+	//int64_t timeStamp = 0;
 	float channel_temps_local[NUM_THERMISTORS];
 	channel_temps_local[0] = 0;
-	float tempAvg[5] = {0, 0, 0, 0, 0};
-	for (uint8_t j = 0; j < 5; j++){
+	float tempAvg[NUM_TEMP_READS] = {0};
+	/* Each read takes around 40 msec, so 10 total reads is 400 msec*/
+	for (uint8_t j = 0; j < NUM_TEMP_READS; j++){
 		for (size_t i = 0U; i < NUM_THERMISTORS; i++) {
 
 			(void)adc_sequence_init_dt(&adc_channels[i], sequence);
@@ -1099,6 +1115,8 @@ static float readTemp(struct adc_sequence* sequence){
 				float tempValue = (val_mv) * m_temp + b_temp;
 				channel_temps_local[i] = tempValue;
 			}
+			//timeStamp = k_uptime_get() - start_time;
+			//printk("Read Time: %lld", timeStamp);
 		}
 
 		for (uint8_t i = 0; i < NUM_THERMISTORS; i++){
@@ -1108,9 +1126,9 @@ static float readTemp(struct adc_sequence* sequence){
 
 	// Mean
 	// Median
-	qsort(tempAvg, 5, sizeof(float), compare);
+	qsort(tempAvg, NUM_TEMP_READS, sizeof(float), compare);
 
-	return tempAvg[2] - TEMP_OFFSET;
+	return (THERMISTOR_SCALING * tempAvg[1] + TEMP_OFFSET);
 }
 
 

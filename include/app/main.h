@@ -3,7 +3,7 @@
 
 /* Configuration flags */
 #define ASSEMBLY_TESTING			0
-#define USE_REAL_DATA				0
+#define USE_REAL_DATA				1
 #define REAL_TIME					1
 
 /* DT NODELABELS */
@@ -20,10 +20,27 @@
 #define POWER_ENABLE_LOW			DT_ALIAS(my_power_enable_low)
 #define POWER_BUTTON				DT_ALIAS(my_power_button)
 
+/* Heater Params */
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
+#define NUM_THERMISTORS				2
+#define CHIP_HEATER					0
+#if CHIP_HEATER
 #define K_P							8 // Ku = 25
 #define K_I							0.1 // Pu = 40 sec
 #define K_D							20 // May not be necessary
+#define THERMISTOR_SCALING			1
+#define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
+#define TEMP_OFFSET					1 // Gets added to temperature reading 
+#else
+#define NUM_TEMP_READS				3
+#define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
+#define K_C							20.0 // Ku = 25
+#define K_I							(0.0033 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
+#define T_D							0 // May not be necessary
+#define THERMISTOR_SCALING			1.42
+#define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
+#define TEMP_OFFSET					-10.3
+#endif
 
 /* Threading Params */
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
@@ -71,9 +88,6 @@
 #define PAGE200						0x0C8200
 #define UART_LSB_FIRST				0
 #define UART_MSB_FIRST				1
-#define NUM_THERMISTORS				2
-#define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define TEMP_OFFSET					-1
 
 /* For calculate parameters */
 #define MA_BUF_N 			10
