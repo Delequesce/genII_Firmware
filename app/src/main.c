@@ -563,7 +563,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			
 			/* PID */
 			heater_errP = test_cfg.incubationTemp-tempAvg;
-			if (heater_errP < 5){
+			if (heater_errP > 5){
 				heater_errI = 0;
 				pulse_cycles = 0;
 			}
