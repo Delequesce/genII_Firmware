@@ -64,7 +64,7 @@ static float Z_imag_Mat[N_AVERAGES] = {0};
 
 static const struct impedance_data qcData[5][4] = {
 	{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
-	{{.C = 48.0, .G = 6.688}, {.C = 98.8, .G = 2.570}, {.C = 229.9, .G = 10.080}, {.C = 326.6, .G = 6.686}},
+	{{.C = 48.0, .G = 6.688}, {.C = 229.9, .G = 10.080}, {.C = 98.8, .G = 2.570}, {.C = 326.6, .G = 6.686}},
 	{{.C = 47.2, .G = 6.689}, {.C = 99.4, .G = 2.571}, {.C = 230.0, .G = 10.037}, {.C = 319.5, .G = 6.691}},
 	{{.C = 47.2, .G = 6.692}, {.C = 100.1, .G = 2.572}, {.C = 224.9, .G = 10.033}, {.C = 324.3, .G = 6.683}},
 	{{.C = 46.7, .G = 6.689}, {.C = 227.6, .G = 10.040}, {.C = 100.6, .G = 2.572}, {.C = 322.6, .G = 6.691}},
@@ -562,13 +562,13 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		if(heaterState == HEATING){
 			
 			/* PID */
-			if (tempAvg < 32){
+			heater_errP = test_cfg.incubationTemp-tempAvg;
+			if (heater_errP < 5){
 				heater_errI = 0;
 				pulse_cycles = 0;
 			}
 			else{
 				/* Find PID errors and calculate output duty cycle */
-				heater_errP = test_cfg.incubationTemp-tempAvg;
 				heater_errI = heater_errI + heater_errP;
 				heater_errD = prevTempAvg - tempAvg;
 				prevTempAvg = tempAvg;
@@ -675,7 +675,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float current_value_Vr, current_value_Ve;
 
 	/* For Parameter Calculations */
-	static struct outputParams opData[N_CHANNELS_MAX] = {{
+	struct outputParams opData[N_CHANNELS_MAX] = {{
 		.tPeak = 0,
 		.deltaEps = 0,
 		.deltaEpsTime = 0,
@@ -683,14 +683,17 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		.smaxTime = 0,
 	}};
 
-	static struct calcParamsVars cpv[N_CHANNELS_MAX] = {{
+	struct calcParamsVars cpv[N_CHANNELS_MAX] = {{
 		.prevX = 0,
 		.C_max = 0,
 		.x_ma = 0,
 		.slp = 0,
 	}};
 
-	static struct dataWriteStruct dwStruct[N_CHANNELS_MAX];
+	struct dataWriteStruct dwStruct[N_CHANNELS_MAX] = {{
+		.impDat = {0}, 
+		.opDat = {0},
+	}};
 
 	static float ma_buf0[MA_BUF_N];
     static float ma_buf1[MA_BUF_N];
@@ -1128,7 +1131,7 @@ static float readTemp(struct adc_sequence* sequence){
 	// Median
 	qsort(tempAvg, NUM_TEMP_READS, sizeof(float), compare);
 
-	return (THERMISTOR_SCALING * tempAvg[1] + TEMP_OFFSET);
+	return (THERMISTOR_SCALING * tempAvg[NUM_TEMP_READS/2] + TEMP_OFFSET);
 }
 
 
