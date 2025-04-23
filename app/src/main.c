@@ -392,7 +392,8 @@ static void uartIOThread_entry_point(){
 						break;
 					case 'H': // Toggle Heater
 						/* Toggle global parameter for heater thread to observe */
-						heaterState = (heaterState + 1) % 2;
+						heaterState = p_char[1] - 48;
+						//heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
 						if (heaterState == NOT_HEATING){
 							//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
