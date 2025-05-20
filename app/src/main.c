@@ -50,8 +50,9 @@ static const uint32_t tia_shdn_states[7] = {
 };
 
 /* Battery LUTs */
-static const uint8_t capacityArray[11] = {100, 94, 85, 75, 62, 53, 40, 22, 13, 3, 0};
-//static const uint8_t voltageArray[11] = {4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, }
+static const uint8_t capacityArray[11] = {100, 75, 50, 25, 0};
+static const uint16_t voltageArray[11] = {4200, 3980, 3840, 3750, 3600};
+//static bool batteryMonitoringEnabled = false;
 
 /* Function forward Declarations */
 static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data,
@@ -74,14 +75,17 @@ static const struct impedance_data qcData[5][4] = {
 k_tid_t ia_tid; // IA Measurement Thread
 k_tid_t heater_tid;
 k_tid_t uartio_tid;
+k_tid_t battery_tid;
 struct k_thread IA_thread_data;
 struct k_thread heater_thread_data;
 struct k_thread uartio_thread_data;
+struct k_thread battery_thread_data;
 K_THREAD_STACK_DEFINE(heater_stack_area, HEATER_STACK_SIZE);
 //K_THREAD_DEFINE(heater_tid, HEATER_STACK_SIZE, heaterThread_entry_point, NULL, NULL, NULL, HEATER_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(uartio_stack_area, UARTIO_STACK_SIZE);
 //K_THREAD_DEFINE(uartIO_tid, UARTIO_STACK_SIZE, uartIOThread_entry_point, NULL, NULL, NULL, UARTIO_THREAD_PRIORITY, 0, 0);
 K_THREAD_STACK_DEFINE(IA_stack_area, IA_STACK_SIZE); 
+K_THREAD_STACK_DEFINE(battery_stack_area, BATTERY_STACK_SIZE); 
 
 /* Message and work queue */
 K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 4, 1); // Message queue can handle 10 items of size MSG_SIZE (bytes), aligned to 1 byte boundary. 
@@ -101,6 +105,7 @@ static const struct gpio_dt_spec charge_enable_high = GPIO_DT_SPEC_GET(CHARGE_EN
 static const struct gpio_dt_spec power_enable_low = GPIO_DT_SPEC_GET(POWER_ENABLE_LOW, gpios);
 static const struct gpio_dt_spec power_button = GPIO_DT_SPEC_GET(POWER_BUTTON, gpios);
 
+
 // Necessary structure for button interrupt handler
 static struct gpio_callback button_cb_data;
 
@@ -118,6 +123,16 @@ static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
 static const struct adc_dt_spec adc_channels[] = {
 	DT_FOREACH_PROP_ELEM(DT_PATH(zephyr_user), io_channels,
 			     DT_SPEC_AND_COMMA)
+};
+
+/* Set up Battery Monitoring */
+/* Buffer where samples will be written */
+uint16_t buf_batt;
+struct adc_sequence sequence_batt = {
+	.buffer = &buf_batt,
+	/* buffer size in bytes, not number of samples */
+	.buffer_size = sizeof(buf_batt),
+	.calibrate = false,
 };
 
 /* UART ISR params */
@@ -237,6 +252,7 @@ int main(){
 	}
 	
 	/* Set up power button behavior */
+	#if SLEEPBUTTON
 	ret = gpio_is_ready_dt(&power_button);
 	if (!ret){
 		printk("Error: button device is not ready\n");
@@ -259,16 +275,10 @@ int main(){
 		gpio_add_callback(power_button.port, &button_cb_data);
 		//printk("Button Initialized!");
 	}
-	
-	/*
-	if (readBatteryLevel_Init() < 0){
-		printk("EBattery Reading Initialization Failure. Cannot read battery voltages");
-	}
-	*/
-
+	#endif 
 	//k_yield();
 
-	// Create Heater and Uart Threads
+	// Create Heater, Uart, and Battery Threads
 	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
 		K_THREAD_STACK_SIZEOF(heater_stack_area),
 		heaterThread_entry_point, 
@@ -281,10 +291,16 @@ int main(){
 		NULL, NULL, NULL, 
 		UARTIO_THREAD_PRIORITY, 0, K_NO_WAIT);
 
+	battery_tid = k_thread_create(&battery_thread_data, battery_stack_area,
+		K_THREAD_STACK_SIZEOF(battery_stack_area),
+		batteryThread_entry_point, 
+		NULL, NULL, NULL, 
+		BATTERY_THREAD_PRIORITY, 0, K_NO_WAIT);
 	
 	/* Run Loop to check for flag set by shutdown handler */
 	/* We need to disable and re-enable GPIO interrupts to avoid triggering back to back wakeup and shutdowns*/
 	for (;;){
+		#if SLEEPBUTTON
 		if (activeState == SHUTTINGDOWN){
 			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_DISABLE);
 			shutdownSystem();
@@ -295,11 +311,12 @@ int main(){
 			wakeupSystem();
 			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
 		}
+		#endif
 		/* Sleep to allow heater, uart, and IA threads to operate */
 		k_msleep(500);
 	}
 
-	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
+	return 0;
 }
 
 int compare(const void* a, const void* b){
@@ -371,6 +388,10 @@ static void uartIOThread_entry_point(){
 						//test_cfg.channels
 						// Respond positively
 						uart_write_singleChar('K', true);
+						break;
+					case 'R': // Battery (Read battery level and print)
+						uart_write_singleChar('K', true);
+						readBatteryLevel(&sequence_batt);
 						break;
 					case 'L':
 						test_cfg.channelOn[0] = p_char[1] & 0x1;
@@ -564,7 +585,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			
 			/* PID */
 			heater_errP = test_cfg.incubationTemp-tempAvg;
-			if (heater_errP > 5){
+			if (heater_errP > 0){
 				heater_errI = 0;
 				pulse_cycles = 0;
 			}
@@ -582,6 +603,15 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
 				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
 			}
+
+			// For Testing
+			// if (count < 300){
+			// 	pulse_cycles = 0;
+			// }
+			// else{
+			// 	pulse_cycles = V_SIG_PERIOD;
+			// }
+
 			//printk("%0.2f,%d,%0.2f,%0.2f\n", tempAvg, pulse_cycles, K_C*heater_errP, K_C * K_I* heater_errI);
 			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
 				printk("EError: Failed to set heater pulse");
@@ -610,6 +640,40 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		k_msleep(sleepTime);
 	}
 	return;
+}
+
+static void batteryThread_entry_point(void *unused1, void *unused2, void *unused3){
+
+	ARG_UNUSED(unused1);
+	ARG_UNUSED(unused2);
+	ARG_UNUSED(unused3);
+	
+	/* Configure channel and sequence prior to sampling. */
+	if (!adc_is_ready_dt(&adc_channels[NUM_THERMISTOR_CHANNELS])) {
+		printk("EADC controller device %s not ready\n", adc_channels[NUM_THERMISTOR_CHANNELS].dev->name);
+		return;
+	}
+
+	if (adc_channel_setup_dt(&adc_channels[NUM_THERMISTOR_CHANNELS]) < 0) {
+		printk("ECould not setup battery read channel\n");
+		return;
+	}
+
+	uint8_t batteryCapacity = 0;
+	while(true){
+
+		/* Read current battery level */
+		/* This also prints it */
+		batteryCapacity = readBatteryLevel(&sequence_batt);
+
+		/* Sleep for 3 minutes */
+		k_msleep(180000);
+
+	}
+
+
+	return;
+
 }
 
 /* Performs measurements */
@@ -866,7 +930,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 					/* Function to calculate Output Parameters and moving average */
 					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+
+					#if SENDFILTEREDDATA
 					testDataMat_lite[c].C = cpv[c].x_ma;
+					#endif
 
 					/* Package into single data structure */
 					dwStruct[c].impDat = testDataMat_lite[c];
@@ -1142,32 +1209,6 @@ static void dma_tcie_callback(){
 	k_wakeup(ia_tid);
 }
 
-/** Sets up battery level read, either should make into thread or call on startup */
-static uint8_t readBatteryLevel_Init(){
-
-	/* Buffer where samples will be written */
-	uint16_t buf;
-	struct adc_sequence sequence = {
-		.buffer = &buf,
-		/* buffer size in bytes, not number of samples */
-		.buffer_size = sizeof(buf),
-		.calibrate = false,
-	};
-	
-	/* Configure channel and sequence prior to sampling. */
-	if (!adc_is_ready_dt(&adc_channels[NUM_THERMISTOR_CHANNELS])) {
-		printk("EADC controller device %s not ready\n", adc_channels[NUM_THERMISTOR_CHANNELS].dev->name);
-		return -1;
-	}
-
-	if (adc_channel_setup_dt(&adc_channels[NUM_THERMISTOR_CHANNELS]) < 0) {
-		printk("ECould not setup battery read channel\n");
-		return -1;
-	}
-
-	return 0;
-	/* End Initialization Block */
-}
 
 /** This function is called periodically to read the battery level and send data to Pi */
 static uint8_t readBatteryLevel(struct adc_sequence* sequence){
@@ -1193,6 +1234,7 @@ static uint8_t readBatteryLevel(struct adc_sequence* sequence){
 	
 	val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
 	val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b. This is the voltage level in mV
+	val_mv = val_mv << 1; // Multiply read value by 2 to get real battery voltage 
 	err = adc_raw_to_millivolts_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], &val_mv);
 	if (err < 0) {
 		printk("EValue in mV not available\n");
@@ -1206,13 +1248,31 @@ static uint8_t readBatteryLevel(struct adc_sequence* sequence){
 	 * If the battery is being charged, this will not need to be taken into account, since the discharge rate
 	 * is 0. Therefore, we will need 2 LUTs. 
 	 * */
-	currentBatteryCapacity = capacityArray[(int8_t)(0.01 * (4200 - val_mv))];
+
+	/* Threshold Based system */
+	for (uint8_t i = 0; i < 5; i++){
+		if (val_mv < voltageArray[i]){
+			//currentBatteryCapacity = capacityArray[i];
+			currentBatteryCapacity = i;
+		}
+	}
 
 	/* Finally re-enable battery charging */
 	if (gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("EError Re-enabling battery charging\n");
 		return -1;
 	}
+
+	/* Decide what to do based on level and transmit data to UI */
+	printk("B%d\n", currentBatteryCapacity);
+
+	#if SLEEPBUTTON
+	/* Shut down system if battery voltage drops too low */
+	/*if (currentBatteryCapacity > 3){
+		shutdownSystem();
+	}*/
+	#endif
+
 	return currentBatteryCapacity;
 }
 
@@ -1237,6 +1297,7 @@ static uint8_t readBatteryLevel(struct adc_sequence* sequence){
 
 
 /* Called from interrupt handler. Cannot sleep because not backed by execution thread */
+#if SLEEPBUTTON
 static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
 	/* Either shutdown or wakeup system */
 	//printk("Button Pressed\n");
@@ -1316,7 +1377,7 @@ static void shutdownSystem(){
 
 	return;
 }
-
+#endif
 // static void input_cb(struct input_event *evt, void *user_data){
 // 	ARG_UNUSED(user_data);
 // 	switch (evt->code){

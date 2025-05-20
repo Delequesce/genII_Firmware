@@ -5,6 +5,8 @@
 #define ASSEMBLY_TESTING			0
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
+#define SLEEPBUTTON					1
+#define SENDFILTEREDDATA			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -34,21 +36,23 @@
 #else
 #define NUM_TEMP_READS				3
 #define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
-#define K_C							20.0 // Ku = 25
-#define K_I							(0.0033 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
+#define K_C							15.0 // Ku = 25
+#define K_I							(0.0025 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
 #define T_D							0 // May not be necessary
-#define THERMISTOR_SCALING			1.42
+#define THERMISTOR_SCALING			1//1.42
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define TEMP_OFFSET					-10.3
+#define TEMP_OFFSET					0//-10.3
 #endif
 
 /* Threading Params */
 #define IA_THREAD_PRIORITY         	2    // Adjust as needed
 #define UARTIO_THREAD_PRIORITY   	4
 #define HEATER_THREAD_PRIORITY		5
+#define BATTERY_THREAD_PRIORITY		8
 #define IA_STACK_SIZE            	4096
 #define UARTIO_STACK_SIZE        	1024
 #define HEATER_STACK_SIZE			1024
+#define BATTERY_STACK_SIZE			1024
 //#define N_DATA_BYTES             	8 // C (4), G (4) = 8 bytes
 
 /* UART */
@@ -179,12 +183,12 @@ static int configure_uart_device(const struct device *dev);
 static void uartIOThread_entry_point();
 static void testThread_entry_point(const struct test_config* test_cfg, void *unused1, void *unused2);
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3);
+static void batteryThread_entry_point(void *unused1, void *unused2, void *unused3);
 static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
 static uint8_t readBatteryLevel(struct adc_sequence* sequence);
-static uint8_t readBatteryLevel_Init();
 static void wakeupSystem();
 static void shutdownSystem();
 static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
@@ -1998,8 +2002,5 @@ static const float CDataFake[1800][N_CHANNELS_MAX] = {
 	{166.10, 164.74, 122.91, 128.05}
 };
 #endif
-
-
-
 
 #endif
