@@ -5,6 +5,7 @@
 #define ASSEMBLY_TESTING			0
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
+#define SENDFILTEREDDATA			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -34,8 +35,8 @@
 #else
 #define NUM_TEMP_READS				3
 #define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
-#define K_C							20.0 // Ku = 25
-#define K_I							(0.0033 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
+#define K_C							15.0 // Ku = 25
+#define K_I							(0.0025 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
 #define T_D							0 // May not be necessary
 #define THERMISTOR_SCALING			1.42
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings

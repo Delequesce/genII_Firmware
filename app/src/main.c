@@ -866,7 +866,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 					/* Function to calculate Output Parameters and moving average */
 					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+					
+					#if SENDFILTEREDDATA 
 					testDataMat_lite[c].C = cpv[c].x_ma;
+					#endif
 
 					/* Package into single data structure */
 					dwStruct[c].impDat = testDataMat_lite[c];
