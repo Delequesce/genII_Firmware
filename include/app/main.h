@@ -165,6 +165,11 @@ struct outputParams{
 	float smaxTime;
 };
 
+struct heaterData{
+	float tempAvg;
+	float pulse_cycles;
+};
+
 /* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
 struct dataWriteStruct{
 	struct impedance_data impDat;

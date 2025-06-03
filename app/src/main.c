@@ -494,6 +494,12 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	uint32_t count = 0;
 	uint32_t pulse_cycles = 0;
 
+	/* Create Heater Data Structure */
+	struct heaterData heaterDataStruct = {
+		.tempAvg = 0,  
+		.pulse_cycles = 0
+	};
+
 	/* Buffer where samples will be written */
 	uint16_t buf;
 	struct adc_sequence sequence = {
@@ -518,7 +524,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	float heater_errP, heater_errD;
 	heater_errI = 0;
 	int err;
-	float tempAvg = 0;
 	float CCTemp = 0;
 	float prevTempAvg = 0;
 	float prevCCTemp = 0;
@@ -528,10 +533,10 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	//static bool heatFlag = 0;
 
 	/* Initial Read */
-	tempAvg = readTemp(&sequence);
-	CCTemp = tempAvg;
-	prevTempAvg = tempAvg;
-	prevCCTemp = tempAvg;
+	heaterDataStruct.tempAvg = readTemp(&sequence);
+	CCTemp = heaterDataStruct.tempAvg;
+	prevTempAvg = CCTemp;
+	prevCCTemp = CCTemp;
 	uint8_t tempWriteFlag = 0;
 
 	int64_t startTime = k_uptime_get();
@@ -539,7 +544,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	while(1){
 		
 		/* This operation takes around 400 msec */
-		tempAvg = readTemp(&sequence);
+		heaterDataStruct.tempAvg = readTemp(&sequence);
 
 		/* Update estimate of ClotChip Temperature based on rate of change */
 		//CCTemp = (tempAvg-prevTempAvg)*1.0f + prevCCTemp; 
@@ -552,18 +557,11 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		// 	}
 		// }
 		/* Send temperature reading to GUI */
-		if(deviceConnected){
-			if (tempWriteFlag == 1){
-				uart_write_32f(&tempAvg, 1, 'T');
-				tempWriteFlag = 0;
-			}
-			tempWriteFlag++;
-		}
 
 		if(heaterState == HEATING){
 			
 			/* PID */
-			heater_errP = test_cfg.incubationTemp-tempAvg;
+			heater_errP = test_cfg.incubationTemp-heaterDataStruct.tempAvg;
 			if (heater_errP > 5){
 				heater_errI = 0;
 				pulse_cycles = 0;
@@ -571,8 +569,8 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			else{
 				/* Find PID errors and calculate output duty cycle */
 				heater_errI = heater_errI + heater_errP;
-				heater_errD = prevTempAvg - tempAvg;
-				prevTempAvg = tempAvg;
+				heater_errD = prevTempAvg - heaterDataStruct.tempAvg;
+				prevTempAvg = heaterDataStruct.tempAvg;
 
 				#if CHIP_HEATER
 				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1-(K_P * heater_errP + K_I * heater_errI + K_D * heater_errD)*0.01));
@@ -600,6 +598,16 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			// Update duty cycle using zephyr driver
 			//pulse_cycles = 32;
 
+		}
+
+		/* Send temperature and heat data*/
+		heaterDataStruct.pulse_cycles = (float)(pulse_cycles);
+		if(deviceConnected){
+			if (tempWriteFlag == 1){
+				uart_write_32f(&heaterDataStruct, 2, 'T');
+				tempWriteFlag = 0;
+			}
+			tempWriteFlag++;
 		}
 
 		/* Schedule new reading every second and let other threads run */
