@@ -564,7 +564,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			
 			/* PID */
 			heater_errP = test_cfg.incubationTemp-tempAvg;
-			if (heater_errP > 5){
+			if (heater_errP > FULL_POWER_ERR_THRESH){
 				heater_errI = 0;
 				pulse_cycles = 0;
 			}
@@ -928,7 +928,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		const float test_Z_real = 149.477; 
 		const float test_Z_imag = 0.070;
 
-		const float expected_calib_real = 63;
+		const float expected_calib_real = -63;
 		const float expected_calib_imag = 20;
 
 		float div_temp_real;

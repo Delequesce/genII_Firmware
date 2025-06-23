@@ -22,19 +22,21 @@
 #define POWER_BUTTON				DT_ALIAS(my_power_button)
 
 /* Heater Params */
+#define CHIP_HEATER					1
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define NUM_THERMISTORS				2
-#define CHIP_HEATER					0
+#define NUM_TEMP_READS				3
+#define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
+#define FULL_POWER_ERR_THRESH		3
+
 #if CHIP_HEATER
 #define K_P							8 // Ku = 25
 #define K_I							0.1 // Pu = 40 sec
-#define K_D							20 // May not be necessary
+#define K_D							0 // May not be necessary
 #define THERMISTOR_SCALING			1
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
 #define TEMP_OFFSET					1 // Gets added to temperature reading 
 #else
-#define NUM_TEMP_READS				3
-#define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
 #define K_C							15.0 // Ku = 25
 #define K_I							(0.0025 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
 #define T_D							0 // May not be necessary
