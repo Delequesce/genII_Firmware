@@ -24,17 +24,18 @@
 /* Heater Params */
 #define HEATERPWM	        		DT_ALIAS(my_heaterpwm)
 #define NUM_THERMISTORS				2
-#define CHIP_HEATER					0
+#define CHIP_HEATER					1
+#define NUM_TEMP_READS				3
+#define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
 #if CHIP_HEATER
 #define K_P							8 // Ku = 25
-#define K_I							0.1 // Pu = 40 sec
+#define K_I							0.05 // Pu = 40 sec
 #define K_D							20 // May not be necessary
 #define THERMISTOR_SCALING			1
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings
-#define TEMP_OFFSET					1 // Gets added to temperature reading 
+#define TEMP_OFFSET					3 // Gets added to temperature reading 
+#define PID_ERR_START				3 // Temperature error above which heater is at full power. 
 #else
-#define NUM_TEMP_READS				3
-#define TEMP_COLLECTION_INTERVAL	2.0 // Number of seconds between temperature reads and heater updates
 #define K_C							15.0 // Ku = 25
 #define K_I							(0.0025 * TEMP_COLLECTION_INTERVAL) // Pu = 40 sec
 #define T_D							0 // May not be necessary
@@ -172,6 +173,7 @@ struct heaterData{
 
 /* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
 struct dataWriteStruct{
+	float timeStamp; // Number of msec that have passed since the start of the test
 	struct impedance_data impDat;
 	struct outputParams opDat;
 };

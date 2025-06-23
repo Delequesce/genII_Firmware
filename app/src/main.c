@@ -562,7 +562,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 			
 			/* PID */
 			heater_errP = test_cfg.incubationTemp-heaterDataStruct.tempAvg;
-			if (heater_errP > 5){
+			if (heater_errP > PID_ERR_START){
 				heater_errI = 0;
 				pulse_cycles = 0;
 			}
@@ -700,6 +700,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}};
 
 	struct dataWriteStruct dwStruct[N_CHANNELS_MAX] = {{
+		.timeStamp = {0},
 		.impDat = {0}, 
 		.opDat = {0},
 	}};
@@ -841,6 +842,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				Z_real_Mat[j] = COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
 				Z_imag_Mat[j] = COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
 			}
+
+			// Get Timestamp for measurement
+			dwStruct[c].timeStamp = (float)(k_uptime_get() - startTime);
 		
 			/* Median Calculation */
 			// Q Sort Based
@@ -883,6 +887,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					dwStruct[c].impDat = testDataMat_lite[c];
 					dwStruct[c].opDat = opData[c];
 				}
+
 			}
 			#else 
 
@@ -906,11 +911,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		if (activeState == TESTRUNNING){
 
 			/* Total write at 115200 baud should take 8-10 msec */
-			uart_write_32f(&dwStruct[0], 28, 'D');
+			uart_write_32f(&dwStruct[0], 32, 'D');
 
 		}
 
-		//ad4002_shutdown(ad4002_master);
 		/* Collection timestamp */
 		#if REAL_TIME
 		timeStamp = k_uptime_get() - startTime;
@@ -920,6 +924,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		#else
 		sleepTime = 300;
 		#endif
+
+		//ad4002_shutdown(ad4002_master);
 		
 		k_msleep(sleepTime); // Usually around 270 msec
 		//t2 = k_uptime_get();
@@ -936,7 +942,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		const float test_Z_real = 149.477; 
 		const float test_Z_imag = 0.070;
 
-		const float expected_calib_real = 63;
+		const float expected_calib_real = -63;
 		const float expected_calib_imag = 20;
 
 		float div_temp_real;
@@ -1097,12 +1103,15 @@ static float readTemp(struct adc_sequence* sequence){
 	int32_t val_mv;
 
 	/* Chip Thermistors (R25 = 2000, B = 3250, R = 1000)*/
-	//float m_temp = 0.0349;
-	//float b_temp = -13.4;
+	#if CHIP_HEATER
+	float m_temp = 0.0349;
+	float b_temp = -13.4;
 
 	/* Axial Thermistors (R25 = 10000, B = 3950, R = 8000)*/
+	#else
 	float m_temp = 0.0287;
 	float b_temp = -17.8;
+	#endif
 	//int64_t start_time = k_uptime_get();
 	//int64_t timeStamp = 0;
 	float channel_temps_local[NUM_THERMISTORS];
