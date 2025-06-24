@@ -31,7 +31,7 @@
 
 #if CHIP_HEATER
 #define K_P							8 // Ku = 25
-#define K_I							0.1 // Pu = 40 sec
+#define K_I							0.05 // Pu = 40 sec
 #define K_D							0 // May not be necessary
 #define THERMISTOR_SCALING			1
 #define TEMP_DIFF_THRESH			1 // Difference in degrees C allowed between any two thermistor readings

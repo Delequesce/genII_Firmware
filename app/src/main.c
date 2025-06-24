@@ -1089,12 +1089,14 @@ static float readTemp(struct adc_sequence* sequence){
 	int32_t val_mv;
 
 	/* Chip Thermistors (R25 = 2000, B = 3250, R = 1000)*/
-	//float m_temp = 0.0349;
-	//float b_temp = -13.4;
-
+	#if CHIP_HEATER
+	float m_temp = 0.0349;
+	float b_temp = -13.4;
+	#else
 	/* Axial Thermistors (R25 = 10000, B = 3950, R = 8000)*/
 	float m_temp = 0.0287;
 	float b_temp = -17.8;
+	#endif
 	//int64_t start_time = k_uptime_get();
 	//int64_t timeStamp = 0;
 	float channel_temps_local[NUM_THERMISTORS];
