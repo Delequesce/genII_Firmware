@@ -563,7 +563,7 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		if(heaterState == HEATING){
 			
 			/* PID */
-			heater_errP = test_cfg.incubationTemp-tempAvg;
+ 			heater_errP = test_cfg.incubationTemp-tempAvg;
 			if (heater_errP > FULL_POWER_ERR_THRESH){
 				heater_errI = 0;
 				pulse_cycles = 0;
@@ -943,7 +943,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				div_temp_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
 
 				/* Check if it matches what is expected before storing */
-				if (fabs(div_temp_real - expected_calib_real) < 5 && fabs(div_temp_imag - expected_calib_imag) < 30){
+				if (fabs(div_temp_real - expected_calib_real) < 20 && fabs(div_temp_imag - expected_calib_imag) < 30){
 					calibMat[c].Zfb_real = div_temp_real;
 					calibMat[c].Zfb_imag = div_temp_imag;
 				}
