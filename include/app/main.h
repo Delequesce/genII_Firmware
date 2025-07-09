@@ -147,6 +147,14 @@ struct calibration_data{
 	float Zfb_imag;
 };
 
+struct statValues{
+	float median;
+	float mean;
+	float min;
+	float max;
+	float var;
+};
+
 struct calcParamsVars{
     float prevX;
     float C_max;
@@ -169,8 +177,8 @@ struct outputParams{
 
 /* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
 struct dataWriteStruct{
+	float timeStamp;
 	struct impedance_data impDat;
-	struct outputParams opDat;
 };
 
 /* Other global Variables */
