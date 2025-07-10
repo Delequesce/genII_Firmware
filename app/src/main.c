@@ -169,22 +169,11 @@ int main(){
         printk("ESHDN pins not ready");
 		return 0;
 	}
-	#if ASSEMBLY_TESTING
-    if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
-        printk("ESHDN pins not properly configured");
-		return 0;
-	}
-	/* Enable ADC and CC Drive */
-	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
-		printk("EError: Failed to setup CC Drive");
-		return -1;
-	}
-	#else
+
 	if (gpio_pin_configure_dt(&adc_shdn_low, GPIO_OUTPUT_ACTIVE) < 0) {
         printk("ESHDN pins not properly configured");
 		return 0;
 	}
-	#endif
 
 	/* Configure TIA SHDNs, setting all SHDN to start */
     if (!gpio_is_ready_dt(&tia_1_shdn_low) ||
@@ -195,15 +184,7 @@ int main(){
 		return 0;
 	}
 
-	#if ASSEMBLY_TESTING
-	if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_ACTIVE) < 0 || 
-				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
-				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
-				gpio_pin_configure_dt(&tia_4_shdn_low, GPIO_OUTPUT_INACTIVE) < 0) {
-				printk("ETIA Multiplexing Error");
-				return 0;
-			}
-	#else
+
 	if (gpio_pin_configure_dt(&tia_1_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_2_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 || 
 				gpio_pin_configure_dt(&tia_3_shdn_low, GPIO_OUTPUT_INACTIVE) < 0 ||
@@ -211,7 +192,6 @@ int main(){
 				printk("ETIA Multiplexing Error");
 				return 0;
 			}
-	#endif
 
 	/* Set up power to Raspberry Pi (Power enable) and battery charging (charge enable) GPIOs */
 	if (!gpio_is_ready_dt(&charge_enable_high) || gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_ACTIVE) < 0){
@@ -225,11 +205,11 @@ int main(){
 	
 
 	// Create Heater and Uart Threads
-	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
-		K_THREAD_STACK_SIZEOF(heater_stack_area),
-		heaterThread_entry_point, 
-		NULL, NULL, NULL, 
-		HEATER_THREAD_PRIORITY, 0, K_NO_WAIT);
+	// heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
+	// 	K_THREAD_STACK_SIZEOF(heater_stack_area),
+	// 	heaterThread_entry_point, 
+	// 	NULL, NULL, NULL, 
+	// 	HEATER_THREAD_PRIORITY, 0, K_NO_WAIT);
 
 	uartio_tid = k_thread_create(&uartio_thread_data, uartio_stack_area,
 		K_THREAD_STACK_SIZEOF(uartio_stack_area),
@@ -258,8 +238,6 @@ static int configure_uart_device(const struct device *dev){
 		.flow_ctrl = UART_CFG_FLOW_CTRL_NONE,
 	};
 
-	
-
 	if (uart_configure(dev, &cfg) < 0){
 		return -1;
 	}
@@ -286,7 +264,6 @@ static int configure_uart_device(const struct device *dev){
 
 /* Polling based UART handler thread */
 static void uartIOThread_entry_point(){
-	//printk("EUart Thread Starting\n");
 
 	while(1){
 		/* Check messagequeue */
@@ -299,7 +276,6 @@ static void uartIOThread_entry_point(){
 				if (activeState == IDLE){
 					case 'C': // Connect to Device
 						uart_write_singleChar('K', true);
-						//deviceConnected = false;
 						deviceConnected = true;
 						break;
 					case 'S': // Alter Test Configuration Structure, convert from ascii encoding
@@ -331,10 +307,8 @@ static void uartIOThread_entry_point(){
 					case 'H': // Toggle Heater
 						/* Toggle global parameter for heater thread to observe */
 						heaterState = p_char[1] - 48;
-						//heaterState = (heaterState + 1) % 2;
 						heater_errI = 0; // Reset Integral counter
 						if (heaterState == NOT_HEATING){
-							//pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 							pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 						}
 						// Acknowledge Request
@@ -378,14 +352,6 @@ static void uartIOThread_entry_point(){
 										&eqc_cfg, NULL, NULL, 
 										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
 						break;
-					case 'F': // Debugging System
-						activeState = FREERUNNING;
-						ia_tid = k_thread_create(&IA_thread_data, IA_stack_area,
-										K_THREAD_STACK_SIZEOF(IA_stack_area),
-										testThread_entry_point, 
-										NULL, NULL, NULL, 
-										IA_THREAD_PRIORITY, 0, K_NO_WAIT);
-						break;
 					case 'Y': // Disconnect
 						uart_write_singleChar('K', true);
 						deviceConnected = false;
@@ -417,13 +383,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	ARG_UNUSED(unused1);
 	ARG_UNUSED(unused2);
 	ARG_UNUSED(unused3);
-
-	//printk("EHeater Thread Starting\n");
-
-	/* Enable Heater power */
-	/*if (gpio_pin_set_dt(&heater_en, 1) < 0) {
-		return 0;
-	}*/
 
 	/* Ensure Channel is held HIGH until heating begins */
 	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
@@ -463,8 +422,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 	bool heater_on_off = false; 
 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
-	//static bool heatFlag = 0;
-
 	/* Initial Read */
 	tempAvg = readTemp(&sequence);
 	CCTemp = tempAvg;
@@ -479,16 +436,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 		/* This operation takes around 400 msec */
 		tempAvg = readTemp(&sequence);
 
-		/* Update estimate of ClotChip Temperature based on rate of change */
-		//CCTemp = (tempAvg-prevTempAvg)*1.0f + prevCCTemp; 
-		//prevCCTemp = CCTemp;
-		//prevTempAvg = tempAvg;
-
-		// for (size_t i = 0U; i < NUM_THERMISTORS; i++){
-		// 	if (fabs(channel_temps[i] - tempAvg) > TEMP_DIFF_THRESH){
-		// 		printk("ETemperatures on board are spatially uneven\n");
-		// 	}
-		// }
 		/* Send temperature reading to GUI */
 		if(deviceConnected){
 			if (tempWriteFlag == 1){
@@ -525,19 +472,6 @@ static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3
 				printk("EError: Failed to set heater pulse");
 				return -1;
 			}
-
-			//char int_buffer[9];
-			//sprintf(int_buffer, "%lu", pulse_cycles);
-
-			//Optional Print Pulse Cycles
-			/*uart_poll_out(uart_dev, 'E');
-			for(int k = 0; k < 2; k++){
-				uart_poll_out(uart_dev, int_buffer[k]);
-			}
-			uart_poll_out(uart_dev, '\n');*/
-			// Update duty cycle using zephyr driver
-			//pulse_cycles = 32;
-
 		}
 
 		/* Schedule new reading every second and let other threads run */
@@ -583,11 +517,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	static struct impedance_data testDataMat_lite[4] = {0};
 
-	/*for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
-        *(Ve_data + n) = 1;
-        *(Vr_data + n) = 1;
-    } */
-
 	/* Enable ADC and CC Drive */
 	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
 		printk("EError: Failed to setup CC Drive");
@@ -631,44 +560,12 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 
 	/* Sets up necessary peripherals (DMA, SPI, Timers) for reads. */
-	#if USE_REAL_DATA
 	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
 	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
-	#endif
 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
-
-	/* Set to continuous run if FREERUNNING enabled for debugging */
-	if (activeState == FREERUNNING){
-		printk("Now Entering Free Run Debug Mode\n");
-		/* Set Channel 1 to always on */
-		c = 0;
-		if (gpio_pin_configure_dt(&tia_1_shdn_low, tia_shdn_states[c+3]) < 0 || 
-				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
-				gpio_pin_configure_dt(&tia_3_shdn_low, tia_shdn_states[c+1]) < 0 ||
-				gpio_pin_configure_dt(&tia_4_shdn_low, tia_shdn_states[c]) < 0) {
-				printk("ETIA Multiplexing Error");
-				return 0;
-			}
-
-		while(true){
-
-			/* Read Data from ADC */
-			#if USE_REAL_DATA
-			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
-			k_msleep(2); // Thread sleeps until DMA callback is triggered
-
-			/* Copy data to safe memory location */ 
-			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
-			k_msleep(1);
-			#endif
-
-		}
-		return;
-	}
 
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
