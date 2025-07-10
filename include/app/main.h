@@ -2,10 +2,9 @@
 #define MAIN_INCLUDE_HEADER
 
 /* Configuration flags */
-#define ASSEMBLY_TESTING			0
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
-#define SENDFILTEREDDATA			0
+#define ADVANCED_STATISTICS			1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -151,8 +150,19 @@ struct impedance_data{
 	float G;
 };
 
+#if ADVANCED_STATISTICS
+struct statValues{
+	float median;
+	float mean;
+	float min;
+	float max;
+	float var;
+};
+#endif
+
 /* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
 struct dataWriteStruct{
+	float collectionTime; 
 	struct impedance_data impDat;
 };
 

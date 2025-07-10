@@ -53,6 +53,8 @@ static const uint32_t tia_shdn_states[7] = {
 static struct impedance_data testDataMat[DEFAULT_EQC_TIME][4] = {{0}};
 static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
+static float C_Mat[N_AVERAGES] = {0};
+static float G_Mat[N_AVERAGES] = {0};
 
 static const struct impedance_data qcData[5][4] = {
 	{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
@@ -258,8 +260,6 @@ static int configure_uart_device(const struct device *dev){
 	uart_irq_rx_enable(uart_dev);
 	
 	return 0;
-
-
 }
 
 /* Polling based UART handler thread */
@@ -377,112 +377,112 @@ static void uartIOThread_entry_point(){
 	return;
 }
 
-static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3){
+// static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3){
 
-	/* Casts unused params to void to avoid compiler warnings */
-	ARG_UNUSED(unused1);
-	ARG_UNUSED(unused2);
-	ARG_UNUSED(unused3);
+// 	/* Casts unused params to void to avoid compiler warnings */
+// 	ARG_UNUSED(unused1);
+// 	ARG_UNUSED(unused2);
+// 	ARG_UNUSED(unused3);
 
-	/* Ensure Channel is held HIGH until heating begins */
-	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
+// 	/* Ensure Channel is held HIGH until heating begins */
+// 	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
 
-	/* Configure */
-	uint32_t count = 0;
-	uint32_t pulse_cycles = 0;
+// 	/* Configure */
+// 	uint32_t count = 0;
+// 	uint32_t pulse_cycles = 0;
 
-	/* Buffer where samples will be written */
-	uint16_t buf;
-	struct adc_sequence sequence = {
-		.buffer = &buf,
-		/* buffer size in bytes, not number of samples */
-		.buffer_size = sizeof(buf),
-		.calibrate = false,
-	};
+// 	/* Buffer where samples will be written */
+// 	uint16_t buf;
+// 	struct adc_sequence sequence = {
+// 		.buffer = &buf,
+// 		/* buffer size in bytes, not number of samples */
+// 		.buffer_size = sizeof(buf),
+// 		.calibrate = false,
+// 	};
 	
-	/* Configure channels and sequence individually prior to sampling. */
-	for (size_t i = 0U; i < NUM_THERMISTOR_CHANNELS; i++) {
-		if (!adc_is_ready_dt(&adc_channels[i])) {
-			printk("EADC controller device %s not ready\n", adc_channels[i].dev->name);
-			return -1;
-		}
+// 	/* Configure channels and sequence individually prior to sampling. */
+// 	for (size_t i = 0U; i < NUM_THERMISTOR_CHANNELS; i++) {
+// 		if (!adc_is_ready_dt(&adc_channels[i])) {
+// 			printk("EADC controller device %s not ready\n", adc_channels[i].dev->name);
+// 			return -1;
+// 		}
 
-		if (adc_channel_setup_dt(&adc_channels[i]) < 0) {
-			printk("ECould not setup channel #%d\n", i);
-			return -1;
-		}
-	}
-	float heater_errP, heater_errD;
-	heater_errI = 0;
-	int err;
-	float tempAvg = 0;
-	float CCTemp = 0;
-	float prevTempAvg = 0;
-	float prevCCTemp = 0;
-	bool heater_on_off = false; 
-	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
+// 		if (adc_channel_setup_dt(&adc_channels[i]) < 0) {
+// 			printk("ECould not setup channel #%d\n", i);
+// 			return -1;
+// 		}
+// 	}
+// 	float heater_errP, heater_errD;
+// 	heater_errI = 0;
+// 	int err;
+// 	float tempAvg = 0;
+// 	float CCTemp = 0;
+// 	float prevTempAvg = 0;
+// 	float prevCCTemp = 0;
+// 	bool heater_on_off = false; 
+// 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
 
-	/* Initial Read */
-	tempAvg = readTemp(&sequence);
-	CCTemp = tempAvg;
-	prevTempAvg = tempAvg;
-	prevCCTemp = tempAvg;
-	uint8_t tempWriteFlag = 0;
+// 	/* Initial Read */
+// 	tempAvg = readTemp(&sequence);
+// 	CCTemp = tempAvg;
+// 	prevTempAvg = tempAvg;
+// 	prevCCTemp = tempAvg;
+// 	uint8_t tempWriteFlag = 0;
 
-	int64_t startTime = k_uptime_get();
+// 	int64_t startTime = k_uptime_get();
 
-	while(1){
+// 	while(1){
 		
-		/* This operation takes around 400 msec */
-		tempAvg = readTemp(&sequence);
+// 		/* This operation takes around 400 msec */
+// 		tempAvg = readTemp(&sequence);
 
-		/* Send temperature reading to GUI */
-		if(deviceConnected){
-			if (tempWriteFlag == 1){
-				uart_write_32f(&tempAvg, 1, 'T');
-				tempWriteFlag = 0;
-			}
-			tempWriteFlag++;
-		}
+// 		/* Send temperature reading to GUI */
+// 		if(deviceConnected){
+// 			if (tempWriteFlag == 1){
+// 				uart_write_32f(&tempAvg, 1, 'T');
+// 				tempWriteFlag = 0;
+// 			}
+// 			tempWriteFlag++;
+// 		}
 
-		if(heaterState == HEATING){
+// 		if(heaterState == HEATING){
 			
-			/* PID */
- 			heater_errP = test_cfg.incubationTemp-tempAvg;
-			if (heater_errP > FULL_POWER_ERR_THRESH){
-				heater_errI = 0;
-				pulse_cycles = 0;
-			}
-			else{
-				/* Find PID errors and calculate output duty cycle */
-				heater_errI = heater_errI + heater_errP;
-				heater_errD = prevTempAvg - tempAvg;
-				prevTempAvg = tempAvg;
+// 			/* PID */
+//  			heater_errP = test_cfg.incubationTemp-tempAvg;
+// 			if (heater_errP > FULL_POWER_ERR_THRESH){
+// 				heater_errI = 0;
+// 				pulse_cycles = 0;
+// 			}
+// 			else{
+// 				/* Find PID errors and calculate output duty cycle */
+// 				heater_errI = heater_errI + heater_errP;
+// 				heater_errD = prevTempAvg - tempAvg;
+// 				prevTempAvg = tempAvg;
 
-				#if CHIP_HEATER
-				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1-(K_P * heater_errP + K_I * heater_errI + K_D * heater_errD)*0.01));
-				#else
-				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1- 0.01*K_C*(heater_errP + K_I * heater_errI)));
-				#endif
-				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
-				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
-			}
-			//printk("%0.2f,%d,%0.2f,%0.2f\n", tempAvg, pulse_cycles, K_C*heater_errP, K_C * K_I* heater_errI);
-			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
-				printk("EError: Failed to set heater pulse");
-				return -1;
-			}
-		}
+// 				#if CHIP_HEATER
+// 				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1-(K_P * heater_errP + K_I * heater_errI + K_D * heater_errD)*0.01));
+// 				#else
+// 				pulse_cycles = (uint32_t)(V_SIG_PERIOD * (1- 0.01*K_C*(heater_errP + K_I * heater_errI)));
+// 				#endif
+// 				pulse_cycles = pulse_cycles > V_SIG_PERIOD ? V_SIG_PERIOD:pulse_cycles;
+// 				pulse_cycles = pulse_cycles < 0 ? 0:pulse_cycles;
+// 			}
+// 			//printk("%0.2f,%d,%0.2f,%0.2f\n", tempAvg, pulse_cycles, K_C*heater_errP, K_C * K_I* heater_errI);
+// 			if (pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, pulse_cycles, heaterPwm.flags) < 0){
+// 				printk("EError: Failed to set heater pulse");
+// 				return -1;
+// 			}
+// 		}
 
-		/* Schedule new reading every second and let other threads run */
-		timeStamp = k_uptime_get() - startTime;
-		//printk("Timestamp: %lld", timeStamp);
-		sleepTime = TEMP_COLLECTION_INTERVAL * 1000*(count+1) - timeStamp;
-		count++;
-		k_msleep(sleepTime);
-	}
-	return;
-}
+// 		/* Schedule new reading every second and let other threads run */
+// 		timeStamp = k_uptime_get() - startTime;
+// 		//printk("Timestamp: %lld", timeStamp);
+// 		sleepTime = TEMP_COLLECTION_INTERVAL * 1000*(count+1) - timeStamp;
+// 		count++;
+// 		k_msleep(sleepTime);
+// 	}
+// 	return;
+// }
 
 /* Performs measurements */
 static void testThread_entry_point(const struct test_config* test_cfg, void *unused1, void *unused2){
@@ -517,6 +517,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	static struct impedance_data testDataMat_lite[4] = {0};
 
+	#if ADVANCED_STATISTICS
+	static struct statValues sVals[4] = {0};
+	#endif 
+
 	/* Enable ADC and CC Drive */
 	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
 		printk("EError: Failed to setup CC Drive");
@@ -544,6 +548,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 
 	struct dataWriteStruct dwStruct[N_CHANNELS_MAX] = {{
+		.collectionTime = {0},
 		.impDat = {0}, 
 	}};
 
@@ -635,6 +640,12 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				// Full Set for Median Calculation or Outlier Removal
 				Z_real_Mat[j] = COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
 				Z_imag_Mat[j] = COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
+			
+				// Calculate C and G
+				// Calculate C and G and store in matrix
+				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
+				G_Mat[j] = 1000 * Z_real/mag2Z;				// Result is in mS
+				C_Mat[j] = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 			}
 		
 			/* Median Calculation */
@@ -647,28 +658,23 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			/* Apply small real and imaginary Z Offsets */
 			Z_real += Z_OFF_REAL;
 			Z_imag += Z_OFF_IMAG;
-			
+
+			qsort(C_Mat, N_AVERAGES, sizeof(float), compare);
+			qsort(G_Mat, N_AVERAGES, sizeof(float), compare);
+
 			/* Update calibration moving average */
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
 				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
 			}
 			else{
-				/* Final Calculation and storage */
-				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-				if(activeState == EQC)
+				
+				testDataMat_lite[c].G = G_Mat[N_AVERAGES/2];
+				testDataMat_lite[c].C = C_Mat[N_AVERAGES/2];
+				if(activeState == TESTRUNNING)
 				{
-					testDataMat[i][c].G = 1000 * Z_real/mag2Z;				// Result is in mS
-					testDataMat[i][c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-				}
-				else
-				{
-					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
-					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-					/* Function to calculate Output Parameters and moving average */
-
-					/* Package into single data structure */
 					dwStruct[c].impDat = testDataMat_lite[c];
+					dwStruct[c].collectionTime = k_uptime_get() - startTime;
 				}
 			}
 		}
@@ -677,8 +683,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		if (activeState == TESTRUNNING){
 
 			/* Total write at 115200 baud should take 8-10 msec */
-			uart_write_32f(&dwStruct[0], 28, 'D');
-
+			uart_write_32f(&dwStruct[0], 12, 'D');
 		}
 
 		/* Collection timestamp */
