@@ -79,7 +79,6 @@
 #define RESOLUTION_MASK				0xFFFF << (ADC_RESOLUTION - BITS_USED) // 0xFFFF is 16 bits, 0xFFFC is 14
 #define MAX_N_MEASUREMENTS			0x1000 // (0x1000 = 4096)
 #define NUM_THERMISTOR_CHANNELS		2
-#define POWER_OFF_TIME_MS			20000000 
 
 #define N_CHANNELS_MAX      4
 
@@ -147,30 +146,14 @@ struct calibration_data{
 	float Zfb_imag;
 };
 
-struct calcParamsVars{
-    float prevX;
-    float C_max;
-	float x_ma; 
-	float slp;
-};
-
 struct impedance_data{
 	float C;
 	float G;
 };
 
-struct outputParams{
-	float tPeak;
-	float deltaEps;
-	float deltaEpsTime;
-	float smax;
-	float smaxTime;
-};
-
 /* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
 struct dataWriteStruct{
 	struct impedance_data impDat;
-	struct outputParams opDat;
 };
 
 /* Other global Variables */
@@ -186,11 +169,6 @@ static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
-static uint8_t readBatteryLevel(struct adc_sequence* sequence);
-static uint8_t readBatteryLevel_Init();
-static void wakeupSystem();
-static void shutdownSystem();
-static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 static void uart_write_singleChar(char character, bool useLF);
 //static void input_cb(struct input_event *evt, void *user_data);
 

@@ -49,14 +49,6 @@ static const uint32_t tia_shdn_states[7] = {
 	GPIO_OUTPUT_INACTIVE,
 };
 
-/* Battery LUTs */
-static const uint8_t capacityArray[11] = {100, 94, 85, 75, 62, 53, 40, 22, 13, 3, 0};
-//static const uint8_t voltageArray[11] = {4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, }
-
-/* Function forward Declarations */
-static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data,
-	struct outputParams* opData, struct calcParamsVars* cpv_local, uint8_t* flags);
-
 /* Main data structure */
 static struct impedance_data testDataMat[DEFAULT_EQC_TIME][4] = {{0}};
 static float Z_real_Mat[N_AVERAGES] = {0};
@@ -99,12 +91,7 @@ static const struct gpio_dt_spec tia_3_shdn_low = GPIO_DT_SPEC_GET(TIA3_SHDN_LOW
 static const struct gpio_dt_spec tia_4_shdn_low = GPIO_DT_SPEC_GET(TIA4_SHDN_LOW, gpios);
 static const struct gpio_dt_spec charge_enable_high = GPIO_DT_SPEC_GET(CHARGE_ENABLE_HIGH, gpios);
 static const struct gpio_dt_spec power_enable_low = GPIO_DT_SPEC_GET(POWER_ENABLE_LOW, gpios);
-static const struct gpio_dt_spec power_button = GPIO_DT_SPEC_GET(POWER_BUTTON, gpios);
 
-// Necessary structure for button interrupt handler
-static struct gpio_callback button_cb_data;
-
-//INPUT_CALLBACK_DEFINE(NULL, input_cb, NULL);
 
 // Heater Options
 static const struct pwm_dt_spec heaterPwm = PWM_DT_SPEC_GET(HEATERPWM);
@@ -236,37 +223,6 @@ int main(){
 		return 0;
 	}
 	
-	/* Set up power button behavior */
-	ret = gpio_is_ready_dt(&power_button);
-	if (!ret){
-		printk("Error: button device is not ready\n");
-	}
-	if(ret){
-		ret = gpio_pin_configure_dt(&power_button, GPIO_INPUT);
-		if(ret != 0){
-			printk("EFailed to configure button as input\n");
-		}
-	}
-	if(!ret){
-		ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
-		if (ret != 0) {
-			printk("Error %d: failed to configure interrupt on %s pin %d\n",
-			ret, power_button.port->name, power_button.pin);
-		}
-	}
-	if(!ret){
-		gpio_init_callback(&button_cb_data, button_pressed, BIT(power_button.pin));
-		gpio_add_callback(power_button.port, &button_cb_data);
-		//printk("Button Initialized!");
-	}
-	
-	/*
-	if (readBatteryLevel_Init() < 0){
-		printk("EBattery Reading Initialization Failure. Cannot read battery voltages");
-	}
-	*/
-
-	//k_yield();
 
 	// Create Heater and Uart Threads
 	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
@@ -280,24 +236,6 @@ int main(){
 		uartIOThread_entry_point, 
 		NULL, NULL, NULL, 
 		UARTIO_THREAD_PRIORITY, 0, K_NO_WAIT);
-
-	
-	/* Run Loop to check for flag set by shutdown handler */
-	/* We need to disable and re-enable GPIO interrupts to avoid triggering back to back wakeup and shutdowns*/
-	for (;;){
-		if (activeState == SHUTTINGDOWN){
-			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_DISABLE);
-			shutdownSystem();
-			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
-		}
-		if (activeState ==  WAKINGUP){
-			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_DISABLE);
-			wakeupSystem();
-			ret = gpio_pin_interrupt_configure_dt(&power_button, GPIO_INT_EDGE_TO_ACTIVE);
-		}
-		/* Sleep to allow heater, uart, and IA threads to operate */
-		k_msleep(500);
-	}
 
 	return 0; // Scheduler invokes highest priority ready thread, which is uartIOThread (goes to entry point)
 }
@@ -675,36 +613,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	float prev_prev_value_Vr, prev_prev_value_Ve;
 	float current_value_Vr, current_value_Ve;
 
-	/* For Parameter Calculations */
-	struct outputParams opData[N_CHANNELS_MAX] = {{
-		.tPeak = 0,
-		.deltaEps = 0,
-		.deltaEpsTime = 0,
-		.smax = 0,
-		.smaxTime = 0,
-	}};
-
-	struct calcParamsVars cpv[N_CHANNELS_MAX] = {{
-		.prevX = 0,
-		.C_max = 0,
-		.x_ma = 0,
-		.slp = 0,
-	}};
 
 	struct dataWriteStruct dwStruct[N_CHANNELS_MAX] = {{
 		.impDat = {0}, 
-		.opDat = {0},
 	}};
-
-	static float ma_buf0[MA_BUF_N];
-    static float ma_buf1[MA_BUF_N];
-    static float ma_buf2[MA_BUF_N];
-    static float ma_buf3[MA_BUF_N];
-	static circular_buf_t cbt[N_CHANNELS_MAX] = {{.buffer = ma_buf0}, {.buffer = ma_buf1}, {.buffer = ma_buf2}, {.buffer = ma_buf3}};
-    for(i = 0; i < N_CHANNELS_MAX; i++){
-	    circular_buffer_init(&cbt[i], MA_BUF_N);
-    }
-    uint8_t flags[N_CHANNELS_MAX] = {0};
 
 	unsigned char a_char;
 
@@ -748,7 +660,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-			//t2 = k_uptime_get();
 			/* Copy data to safe memory location */ 
 			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
@@ -763,7 +674,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	for(i = 0; i < N_Measurements; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
-		//t1 = k_uptime_get();
 
 		/* Run Loop for Each Channel */
 		for(c = 0; c < N_CHANNELS_MAX; c++){
@@ -783,7 +693,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			}
 
 			/* Perform Initial Read */
-			#if USE_REAL_DATA
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
@@ -793,7 +702,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 				k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-				//t2 = k_uptime_get();
 				/* Copy data to safe memory location */ 
 				memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 				memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
@@ -826,8 +734,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				/* Finally, compute Z */
 				Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
 				Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
-				//Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1); // Moving Average
-				//Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1);
 				
 				// Full Set for Median Calculation or Outlier Removal
 				Z_real_Mat[j] = COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
@@ -849,8 +755,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
 				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
-				//printk("EZ_real: %0.4f\n", Z_real_mean);
-				//printk("EZ_imag: %0.4f\n", Z_imag_mean);
 			}
 			else{
 				/* Final Calculation and storage */
@@ -865,33 +769,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 					/* Function to calculate Output Parameters and moving average */
-					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
-					
-					#if SENDFILTEREDDATA 
-					testDataMat_lite[c].C = cpv[c].x_ma;
-					#endif
 
 					/* Package into single data structure */
 					dwStruct[c].impDat = testDataMat_lite[c];
-					dwStruct[c].opDat = opData[c];
 				}
 			}
-			#else 
-
-			k_msleep(100);
-
-			/* Code to execute if using fake data saved to MCU memory*/
-			testDataMat_lite[c].G = 0;
-			testDataMat_lite[c].C = CDataFake[i][c];
-
-			calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
-					testDataMat_lite[c].C = cpv[c].x_ma;
-
-			/* Package into single data structure */
-			dwStruct[c].impDat = testDataMat_lite[c];
-			dwStruct[c].opDat = opData[c];
-
-			#endif
 		}
 
 		/* Send data over uart */
@@ -902,29 +784,17 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 		}
 
-		//ad4002_shutdown(ad4002_master);
 		/* Collection timestamp */
-		#if REAL_TIME
 		timeStamp = k_uptime_get() - startTime;
 
 		/* Sleep until next collection period */
 		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp;
-		#else
-		sleepTime = 300;
-		#endif
 		
 		k_msleep(sleepTime); // Usually around 270 msec
-		//t2 = k_uptime_get();
-		//printk("TTotal loop time: %lli\n", t2-t1);
-		//k_msleep(1000);
 	}
 
 	/* Perform additional calibration steps, if necessary */
 	if(activeState == CALIBRATING){
-		// Rev 2
-		//const float test_Z_real = 179.636; 
-		//const float test_Z_imag = 0.043; 
-		// Rev 3
 		const float test_Z_real = 149.477; 
 		const float test_Z_imag = 0.070;
 
@@ -954,11 +824,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		uart_write_32f(&calibMat, 8, 'C');
 
 		/* Write to flash memory */
-		//flash_write_protection_set(flash_device, false);
 		flash_erase(flash_device, PAGE200, 32);
 		flash_write(flash_device, PAGE200, &calibMat, 32);
 		printk("ECalibration Values Written to Memory\n");
-		//flash_write_protection_set(flash_device, true);
 		activeState = IDLE;
 		return;
 	}
@@ -1005,11 +873,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		// Return
 		activeState = IDLE;
 		return;
-	}
-	else{
-		/* Store Test Data in Flash */
-		// To Do...
-
 	}
 
 	/* Tell UI that test has completed */
@@ -1089,16 +952,8 @@ static float readTemp(struct adc_sequence* sequence){
 	int32_t val_mv;
 
 	/* Chip Thermistors (R25 = 2000, B = 3250, R = 1000)*/
-	#if CHIP_HEATER
 	float m_temp = 0.0349;
 	float b_temp = -13.4;
-	#else
-	/* Axial Thermistors (R25 = 10000, B = 3950, R = 8000)*/
-	float m_temp = 0.0287;
-	float b_temp = -17.8;
-	#endif
-	//int64_t start_time = k_uptime_get();
-	//int64_t timeStamp = 0;
 	float channel_temps_local[NUM_THERMISTORS];
 	channel_temps_local[0] = 0;
 	float tempAvg[NUM_TEMP_READS] = {0};
@@ -1145,281 +1000,4 @@ static float readTemp(struct adc_sequence* sequence){
 static void dma_tcie_callback(){
 
 	k_wakeup(ia_tid);
-}
-
-/** Sets up battery level read, either should make into thread or call on startup */
-static uint8_t readBatteryLevel_Init(){
-
-	/* Buffer where samples will be written */
-	uint16_t buf;
-	struct adc_sequence sequence = {
-		.buffer = &buf,
-		/* buffer size in bytes, not number of samples */
-		.buffer_size = sizeof(buf),
-		.calibrate = false,
-	};
-	
-	/* Configure channel and sequence prior to sampling. */
-	if (!adc_is_ready_dt(&adc_channels[NUM_THERMISTOR_CHANNELS])) {
-		printk("EADC controller device %s not ready\n", adc_channels[NUM_THERMISTOR_CHANNELS].dev->name);
-		return -1;
-	}
-
-	if (adc_channel_setup_dt(&adc_channels[NUM_THERMISTOR_CHANNELS]) < 0) {
-		printk("ECould not setup battery read channel\n");
-		return -1;
-	}
-
-	return 0;
-	/* End Initialization Block */
-}
-
-/** This function is called periodically to read the battery level and send data to Pi */
-static uint8_t readBatteryLevel(struct adc_sequence* sequence){
-
-	int err;
-	int16_t* val_mv_ptr;
-	int32_t val_mv;
-	uint8_t currentBatteryCapacity = 0;
-
-	/* First have to disable battery charging to allow for reading voltage */
-	if (gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_INACTIVE) < 0) {
-        printk("ECannot Read Battery Level\n");
-		return -1;
-	}
-
-	(void)adc_sequence_init_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], sequence);
-
-	err = adc_read_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], sequence);
-	if (err < 0) {
-		printk("ECould not read (%d)\n", err);
-		return -1;
-	}
-	
-	val_mv_ptr = sequence->buffer; // Can't dereference a generic pointer, so have to cast to int16_t
-	val_mv = (int32_t)(*val_mv_ptr & 0xFFFF); // Cast the 16b data to 32b. This is the voltage level in mV
-	err = adc_raw_to_millivolts_dt(&adc_channels[NUM_THERMISTOR_CHANNELS], &val_mv);
-	if (err < 0) {
-		printk("EValue in mV not available\n");
-		return -1;
-	}
-	
-	/**
-	 * Compare to LUT to determine battery level 
-	 * If the battery is actively supplying power, will have to take into account cabling resistance 
-	 * and average current level. Need to take readings over a 5-10 second period and then average.
-	 * If the battery is being charged, this will not need to be taken into account, since the discharge rate
-	 * is 0. Therefore, we will need 2 LUTs. 
-	 * */
-	currentBatteryCapacity = capacityArray[(int8_t)(0.01 * (4200 - val_mv))];
-
-	/* Finally re-enable battery charging */
-	if (gpio_pin_configure_dt(&charge_enable_high, GPIO_OUTPUT_ACTIVE) < 0) {
-        printk("EError Re-enabling battery charging\n");
-		return -1;
-	}
-	return currentBatteryCapacity;
-}
-
-/**
- * These are called when a specific interrupt is triggerred
- * The procedure is below: 
- * 1) User holds button down. This triggers ISR on PC5.
- * 2) The ISR determines if its a wakeup or shutdown by checking status of power_enable pin. 
- *    It then calls the relevant function: wakeupSystem() or shutdownSystem()
- * SHUTDOWN
- * 1) Shutdown function aborts test and heater threads, keeping uart for communication with Pi. 
- * 2) It then sends UART signal to Pi with shutdown command (b'ZZZ').
- * 3) It then idles and waits for response b'K' from Pi, indicating that it is shutting itself down
- * 4) MCU waits 30 seconds before toggling POWER_EN to HIGH, cutting power to Pi. 
- * 5) Finally, the MCU shuts down the uart thread and just waits for second ISR on PC5 (button press) 
- *    to wake system up.
- * WAKEUP
- * 1) Wakeup function starts up the heater and uart threads as is done on system reset. Also needs to reset 
- *    all GPIOs to their default state
- * 2) Also toggles POWER_EN to power and start up Pi. 
- * */
-
-
-/* Called from interrupt handler. Cannot sleep because not backed by execution thread */
-static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
-	/* Either shutdown or wakeup system */
-	//printk("Button Pressed\n");
-	if (activeState == POWEREDOFF){
-		activeState = WAKINGUP;
-		return;
-	}
-	if (activeState == WAKINGUP){
-		return;
-	}
-	/* Default case */
-	activeState = SHUTTINGDOWN;
-	return;
-}
-
-static void wakeupSystem(){
-	printk("ZWaking up system\n");
-	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_INACTIVE) < 0){
-		printk("Error Re-enabling Power");
-		return;
-	}
-
-	/* Need to re=initialize system as if it was booting from the beginning */
-
-	/* Create Default Threads */
-	heater_tid = k_thread_create(&heater_thread_data, heater_stack_area,
-		K_THREAD_STACK_SIZEOF(heater_stack_area),
-		heaterThread_entry_point, 
-		NULL, NULL, NULL, 
-		HEATER_THREAD_PRIORITY, 0, K_NO_WAIT);
-		
-	uartio_tid = k_thread_create(&uartio_thread_data, uartio_stack_area,
-		K_THREAD_STACK_SIZEOF(uartio_stack_area),
-		uartIOThread_entry_point, 
-		NULL, NULL, NULL, 
-		UARTIO_THREAD_PRIORITY, 0, K_NO_WAIT);
-	
-	activeState = IDLE;
-	heaterState = NOT_HEATING;
-	return;
-}
-
-
-static void shutdownSystem(){
-	/* Transmit shutdown signal to Pi */
-	printk("ZShutting down System\n");
-	printk("ZZZZ\n");
-
-	/* Wait 15 seconds for shutdown and then stop power. */
-	k_busy_wait(POWER_OFF_TIME_MS);
-
-	/* Shut down active threads */
-	if (activeState == TESTRUNNING){
-		k_thread_abort(ia_tid);
-		activeState = IDLE;
-	}
-	k_thread_abort(heater_tid);
-	k_thread_abort(uartio_tid);
-
-	if (gpio_pin_configure_dt(&power_enable_low, GPIO_OUTPUT_ACTIVE) < 0){
-		printk("Error Disabling Power");
-		activeState = IDLE;
-		return;
-	}
-
-	/* Configure button interrupt as wakeup source */
-	//gpio_pin_configure_dt(&power_button, STM32_GPIO_WKUP);
-
-	/* Go into sleep but maintain power regulators.*/
-	pwm_set_cycles(heaterPwm.dev, heaterPwm.channel, V_SIG_PERIOD, V_SIG_PERIOD, heaterPwm.flags);
-	deviceConnected = false;
-
-	/* Actual system poweroff. */
-	printk("System powered down\n");
-	//sys_poweroff();
-	activeState = POWEREDOFF;
-
-	return;
-}
-
-// static void input_cb(struct input_event *evt, void *user_data){
-// 	ARG_UNUSED(user_data);
-// 	switch (evt->code){
-// 		case INPUT_KEY_A:
-// 			printk("Short Press");
-// 			break;
-// 		case INPUT_KEY_X:
-// 			printk("Long Press");
-// 			break;
-// 		default:
-// 			printk("Unknown Event");
-// 			return;
-// 	}
-// }
-
-
-/**
- * Runs every iteration of data collection to calculate parameters
- * flags is [slp_flag, tPeakFound, deltaEpsFound, smaxFound]
- * */
-
-static void calculateParameters(circular_buf_t* cbt, uint16_t n, float data, struct outputParams* opData_local, struct calcParamsVars* cpv_local, uint8_t* flags)
-{
-	// Add incoming data to moving average window
-	circular_buffer_put(cbt, data);
-	cpv_local->x_ma = circular_buffer_avg(cbt);
-
-	/* Not sure if necessary */
-	if(n < 1)
-	{
-		cpv_local->prevX = 0;
-
-	}
-
-	// Don't calculate parameters until after 60 seconds
-	if (n < EARLIEST_PEAK_TIME){
-		return;
-	}
-
-	cpv_local->slp = cpv_local->x_ma - cpv_local->prevX;
-	cpv_local->prevX = cpv_local->x_ma;
-
-
-	/* Tpeak */
-	if(!PEAKFOUND(flags)){
-		if(!SLPFLAG(flags) && cpv_local->slp > 0){
-			(*flags) ^= SLPFLAG_I;
-			return;
-		}
-		
-		if(cpv_local->slp < 0 && opData_local->tPeak == 0)
-		{
-			// Local or Absolute Maximum
-			opData_local->tPeak = n;
-			cpv_local->C_max = data;
-			return;
-		}
-
-		// Determine if max is local or absolute
-		if(data > cpv_local->C_max)
-		{
-			// Can't be a maximum, reset tpeak and Cmax
-			opData_local->tPeak = 0;
-			cpv_local->C_max = 0;
-			return;
-		}
-		(*flags) ^= PEAKFOUND_I;
-		//printf("Peak Found at t = %d sec, %0.2f pF\n", opData->tPeak, C_max);
-		return;
-	}
-	/* Smax (Un-normalized) */
-	if(!SMAXFOUND(flags))
-	{
-		//printf("%d: slp = %0.8f\t smax = %0.8f\t", n, slp, smax);
-		if(cpv_local->slp < opData_local->smax){
-			opData_local->smax = cpv_local->slp;
-			opData_local->smaxTime = n;
-		}
-	}
-
-	/* Delta Epsilon (Un-normalized)*/
-	if(!DELTAEPSFOUND(flags)){
-		// Wait until value has fallen significantly from the peak
-		if(cpv_local->x_ma > cpv_local->C_max * FALL_THRESH){
-			return;
-		}
-		if(cpv_local->slp > SLOPE_THRESH*cpv_local->C_max)
-		{
-			opData_local->deltaEps = 1-(data/cpv_local->C_max);
-			opData_local->deltaEpsTime = n;
-			(*flags) ^= DELTAEPSFOUND_I;
-			//printf("Delta Eps Found at t = %d sec, %0.4f\n", opData->deltaEpsTime, opData->deltaEps);
-
-			opData_local->smax = opData_local->smax/cpv_local->C_max;
-			(*flags) ^= SMAXFOUND_I;
-			//printf("Smax Found at t = %d sec, %0.6f\n", opData->smaxTime, opData->smax);
-
-			return;
-		}
-	}
 }
