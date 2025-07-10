@@ -643,9 +643,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			
 				// Calculate C and G
 				// Calculate C and G and store in matrix
-				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-				G_Mat[j] = 1000 * Z_real/mag2Z;				// Result is in mS
-				C_Mat[j] = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
+				mag2Z = Z_real_Mat[j]*Z_real_Mat[j] + Z_imag_Mat[j]*Z_imag_Mat[j];
+				G_Mat[j] = 1000 * Z_real_Mat[j]/mag2Z;				// Result is in mS
+				C_Mat[j] = 159154.943091895f * Z_imag_Mat[j]/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 			}
 		
 			/* Median Calculation */
@@ -662,13 +662,26 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			qsort(C_Mat, N_AVERAGES, sizeof(float), compare);
 			qsort(G_Mat, N_AVERAGES, sizeof(float), compare);
 
+			#if ADVANCED_STATISTICS
+			/* Calculate other statistics, if desired*/
+			sVals[c].median = C_Mat[N_AVERAGES/2];
+			sVals[c].min = C_Mat[0];
+			sVals[c].max = C_Mat[N_AVERAGES-1];
+			for(j = 0; j < N_AVERAGES; j++){
+				sVals[c].mean = (sVals[c].mean*j + C_Mat[j])/(j+1);
+			}
+			for(j = 0; j < N_AVERAGES; j++){
+				sVals[c].var += pow(C_Mat[j] - sVals[c].mean, 2);
+			}
+			sVals[c].var = sVals[c].var/N_AVERAGES;
+			#endif 
+
 			/* Update calibration moving average */
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
 				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
 			}
 			else{
-				
 				testDataMat_lite[c].G = G_Mat[N_AVERAGES/2];
 				testDataMat_lite[c].C = C_Mat[N_AVERAGES/2];
 				if(activeState == TESTRUNNING)
@@ -684,6 +697,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 			/* Total write at 115200 baud should take 8-10 msec */
 			uart_write_32f(&dwStruct[0], 12, 'D');
+			#if ADVANCED_STATISTICS
+			uart_write_32f(&sVals[0], 20, 'D');
+			#endif
 		}
 
 		/* Collection timestamp */
