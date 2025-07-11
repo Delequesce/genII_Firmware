@@ -4,7 +4,7 @@
 /* Configuration flags */
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
-#define ADVANCED_STATISTICS			1
+#define ADVANCED_STATISTICS			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -59,7 +59,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					100
+#define N_AVERAGES					1
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -177,6 +177,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3);
 static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
+static void uart_write_16i(uint16_t* data, uint16_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
 static void uart_write_singleChar(char character, bool useLF);

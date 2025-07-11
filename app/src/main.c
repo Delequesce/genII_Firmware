@@ -26,8 +26,8 @@ enum testStates activeState = IDLE;
 enum heaterStates heaterState = NOT_HEATING; 
 
 static struct test_config test_cfg = {
-	.runTime = DEFAULT_RUN_TIME,
-	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+	.runTime = 600,
+	.collectionInterval = 5,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
 	.channelOn = {1, 1, 1, 1}, // Change to set default active channels
 	.boardNumber = 0,
@@ -662,6 +662,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			qsort(C_Mat, N_AVERAGES, sizeof(float), compare);
 			qsort(G_Mat, N_AVERAGES, sizeof(float), compare);
 
+			/* Send raw output curves */
+			uart_write_16i(&Ve_data_safe[0], 1050, c+65);
+			uart_write_16i(&Vr_data_safe[0], 1050, c+65);
+
 			#if ADVANCED_STATISTICS
 			/* Calculate other statistics, if desired*/
 			sVals[c].median = C_Mat[N_AVERAGES/2];
@@ -700,7 +704,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		if (activeState == TESTRUNNING){
 
 			/* Total write at 115200 baud should take 8-10 msec */
-			uart_write_32f(&dwStruct[0], 12, 'D');
+			//uart_write_32f(&dwStruct[0], 12, 'D');
 			#if ADVANCED_STATISTICS
 			uart_write_32f(&sVals[0], 20, 'D');
 			#endif
@@ -810,6 +814,28 @@ static void uart_write_singleChar(char character, bool useLF){
 	}
 	return;
 }
+
+static void uart_write_16i(uint16_t* data, uint16_t numData, char messageCode){
+	char buffer[6];
+
+	uint16_t n, i, k = 0;
+	uart_poll_out(uart_dev, messageCode);
+	for (i = 0; i < numData; i++){
+		n = snprintf(buffer, 6, "%hu", *data);
+		n = (n > 6) ? 6: n;
+		for(k = 0; k < n; k++){
+			uart_poll_out(uart_dev, buffer[k]);
+		}
+		data++;
+		if (i+1 < numData){
+			uart_poll_out(uart_dev, '!');
+		}
+		else{
+			uart_poll_out(uart_dev, 0xA);
+		}
+	}
+}
+
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
 static void uart_write_32f(float* data, uint8_t numData, char messageCode){
