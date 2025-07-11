@@ -689,6 +689,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					dwStruct[c].impDat = testDataMat_lite[c];
 					dwStruct[c].collectionTime = k_uptime_get() - startTime;
 				}
+				if (activeState == EQC){
+					testDataMat[i][c].C = testDataMat_lite[c].C;
+					testDataMat[i][c].G = testDataMat_lite[c].G;
+				}
 			}
 		}
 
