@@ -5,6 +5,7 @@
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
 #define ADVANCED_STATISTICS			0
+#define USE_ADC						0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
