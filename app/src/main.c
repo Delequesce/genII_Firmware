@@ -548,6 +548,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	*/
 	if (activeState != CALIBRATING){
 		flash_read(flash_device, PAGE200, &calibMat, 32);
+		uart_write_32f(&calibMat, 8, 'D');
 	}
 
 	/* Data Buffer Initialization */
@@ -797,8 +798,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	/* Perform additional calibration steps, if necessary */
 	if(activeState == CALIBRATING){
-		const float test_Z_real = 179.636;
-		const float test_Z_imag = 0.043;
+		const float test_Z_real = 149.477;
+		const float test_Z_imag = 0.070;
 
 		for(c=0; c<4; c++){
 			if (test_cfg->channelOn[c]){
@@ -815,6 +816,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		flash_erase(flash_device, PAGE200, 32);
 		flash_write(flash_device, PAGE200, &calibMat, 32);
 		printk("ECalibration Values Written to Memory\n");
+		uart_write_32f(&calibMat, 8, 'D');
 		//flash_write_protection_set(flash_device, true);
 		activeState = IDLE;
 		return;
