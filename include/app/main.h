@@ -6,6 +6,7 @@
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
 #define SENDFILTEREDDATA			0
+#define NEW_PROCESSING_LOOP			1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -60,7 +61,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					100
+#define N_AVERAGES					50
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -113,6 +114,7 @@
 #define COMPLEX_MULTIPLY_REAL(r1, i1, r2, i2) (r1*r2 - i1*i2)
 #define COMPLEX_MULTIPLY_IMAG(r1, i1, r2, i2) (r2*i1 + r1*i2)
 #define COMPARE(a, b) (((a) > (b)) - ((a) < (b)))
+#define FORCE_LINKING(x) { void* volatile dummy = &x; }
 
 #define DT_SPEC_AND_COMMA(node_id, prop, idx) \
 	ADC_DT_SPEC_GET_BY_IDX(node_id, idx),
@@ -184,6 +186,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 static void heaterThread_entry_point(void *unused1, void *unused2, void *unused3);
 static int stopTest();
 static void uart_write_32f(float* data, uint8_t numData, char messageCode);
+static void uart_write_16i(uint16_t* data, uint16_t numData, char messageCode);
 static float readTemp(struct adc_sequence* sequence);
 static void dma_tcie_callback();
 static uint8_t readBatteryLevel(struct adc_sequence* sequence);

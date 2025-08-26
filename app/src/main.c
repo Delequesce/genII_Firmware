@@ -27,7 +27,7 @@ enum heaterStates heaterState = NOT_HEATING;
 
 static struct test_config test_cfg = {
 	.runTime = DEFAULT_RUN_TIME,
-	.collectionInterval = DEFAULT_COLLECTION_INTERVAL,
+	.collectionInterval = 10,
 	.incubationTemp = DEFAULT_INCUBATION_TEMP,
 	.channelOn = {1, 1, 1, 1}, // Change to set default active channels
 	.boardNumber = 0,
@@ -667,6 +667,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	const float cos_w0 = cosf(w0);
 	const float sin_w0 = sinf(w0);
 	float mag2Vr, mag2Ve, mag2Z, Z_temp_real, Z_temp_imag;
+	#if NEW_PROCESSING_LOOP
+	FORCE_LINKING(Z_temp_real); // Prevents discarding unused variables
+	FORCE_LINKING(Z_temp_imag);
+	#endif
 	float Vr_real, Vr_imag, Ve_real, Ve_imag;
 	float Z_real, Z_imag = 0;
 	float Z_real_mean[4] = {0, 0, 0, 0};
@@ -760,6 +764,12 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 
 	/* This loop runs each collection for the entire test run time (outer loop) */
+	for(int q = 10; q > 0; q--){
+		printk("Starting in %d seconds\n", q);
+		k_msleep(1000);
+	}
+	printk("Starting in 0 seconds\n");
+
 	for(i = 0; i < N_Measurements; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
@@ -782,12 +792,34 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				return 0;
 			}
 
+			printk("Switching to channel %d\n", c);
+
+			k_msleep(1);
+
+
 			/* Perform Initial Read */
-			#if USE_REAL_DATA
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
-			for(j = 0; j < N_AVERAGES; j++){
+			#if NEW_PROCESSING_LOOP
+			/* First read is what we send out initially */
+			/* Read Data from ADC */
+			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+			k_msleep(2); // Thread sleeps until DMA callback is triggered
+
+			//t2 = k_uptime_get();
+			/* Copy data to safe memory location */ 
+			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
+			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
+
+			/* Write to Serial initial read (takes around 1 second) */
+			uart_write_16i(&Ve_data_safe[0], 1050, c+65);
+			uart_write_16i(&Vr_data_safe[0], 1050, c+65);
+			#endif
+
+			/* Begin looping and processing */
+			timeStamp = k_uptime_get() - startTime;
+			while(timeStamp + 1200 < (10000*i + (c+1)*2500)){
 
 				/* Read Data from ADC */
 				ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
@@ -798,14 +830,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 				memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
 
-				/* Goertzl Algorithm Params */
+				/* Goertzl algorithm */
+				#if NEW_PROCESSING_LOOP
 				prev_value_Vr = 0;
 				prev_prev_value_Vr = 0;
 				prev_value_Ve = 0;
 				prev_prev_value_Ve = 0;
 
-				/* Run Goertzl algorithm to get 1 MHz FFT bin */
-				//t3 = k_uptime_get();
 				for(n = SAMPLES_PER_COLLECTION-N_FFT; n < SAMPLES_PER_COLLECTION; n++){
 					current_value_Ve = (Ve_data_safe[n] & RESOLUTION_MASK) + 2 * cos_w0 * prev_value_Ve - prev_prev_value_Ve;
 					prev_prev_value_Ve = prev_value_Ve;
@@ -815,7 +846,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					prev_prev_value_Vr = prev_value_Vr;
 					prev_value_Vr = current_value_Vr; 
 				}
-				//t4 = k_uptime_get();
+
 				/* Final Step calculates complex FFT bin for each signal */
 				Ve_real = 3*(cos_w0 * prev_value_Ve - prev_prev_value_Ve)/N_FFT/65535.0f;
 				Ve_imag = 3*(sin_w0 * prev_value_Ve)/N_FFT/65535.0f;
@@ -826,190 +857,23 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				/* Finally, compute Z */
 				Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
 				Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
-				//Z_real = (Z_real*j + COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1); // Moving Average
-				//Z_imag = (Z_imag*j + COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag))/(j+1);
+				#endif
 				
-				// Full Set for Median Calculation or Outlier Removal
-				Z_real_Mat[j] = COMPLEX_MULTIPLY_REAL(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
-				Z_imag_Mat[j] = COMPLEX_MULTIPLY_IMAG(Z_temp_real, Z_temp_imag, calibMat[c].Zfb_real, calibMat[c].Zfb_imag);
+				/* Get Timestamp to see if another measurement can be taken */
+				timeStamp = k_uptime_get() - startTime;
 			}
-		
-			/* Median Calculation */
-			// Q Sort Based
-			qsort(Z_real_Mat, N_AVERAGES, sizeof(float), compare);
-			qsort(Z_imag_Mat, N_AVERAGES, sizeof(float), compare);
-			Z_real = Z_real_Mat[N_AVERAGES/2];
-			Z_imag = Z_imag_Mat[N_AVERAGES/2];
 
-			/* Apply small real and imaginary Z Offsets */
-			Z_real += Z_OFF_REAL;
-			Z_imag += Z_OFF_IMAG;
+			/* Send out final output curves (takes around 1 second) */ 
+			uart_write_16i(&Ve_data_safe[0], 1050, c+65);
+			uart_write_16i(&Vr_data_safe[0], 1050, c+65);
+
+			timeStamp = k_uptime_get() - startTime;
+
+			/* Sleep until next collection period */
+			sleepTime = (test_cfg->collectionInterval) * (1000*(i) + (c+1)*250) - timeStamp;
 			
-			/* Update calibration moving average */
-			if (activeState == CALIBRATING){
-				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
-				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
-				//printk("EZ_real: %0.4f\n", Z_real_mean);
-				//printk("EZ_imag: %0.4f\n", Z_imag_mean);
-			}
-			else{
-				/* Final Calculation and storage */
-				mag2Z = Z_real*Z_real + Z_imag*Z_imag;
-				if(activeState == EQC)
-				{
-					testDataMat[i][c].G = 1000 * Z_real/mag2Z;				// Result is in mS
-					testDataMat[i][c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-				}
-				else
-				{
-					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
-					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
-					/* Function to calculate Output Parameters and moving average */
-					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
-					
-					#if SENDFILTEREDDATA 
-					testDataMat_lite[c].C = cpv[c].x_ma;
-					#endif
-
-					/* Package into single data structure */
-					dwStruct[c].impDat = testDataMat_lite[c];
-					dwStruct[c].opDat = opData[c];
-				}
-			}
-			#else 
-
-			k_msleep(100);
-
-			/* Code to execute if using fake data saved to MCU memory*/
-			testDataMat_lite[c].G = 0;
-			testDataMat_lite[c].C = CDataFake[i][c];
-
-			calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
-					testDataMat_lite[c].C = cpv[c].x_ma;
-
-			/* Package into single data structure */
-			dwStruct[c].impDat = testDataMat_lite[c];
-			dwStruct[c].opDat = opData[c];
-
-			#endif
+			k_msleep(sleepTime);
 		}
-
-		/* Send data over uart */
-		if (activeState == TESTRUNNING){
-
-			/* Total write at 115200 baud should take 8-10 msec */
-			uart_write_32f(&dwStruct[0], 28, 'D');
-
-		}
-
-		//ad4002_shutdown(ad4002_master);
-		/* Collection timestamp */
-		#if REAL_TIME
-		timeStamp = k_uptime_get() - startTime;
-
-		/* Sleep until next collection period */
-		sleepTime = (test_cfg->collectionInterval) * 1000*(i+1) - timeStamp;
-		#else
-		sleepTime = 300;
-		#endif
-		
-		k_msleep(sleepTime); // Usually around 270 msec
-		//t2 = k_uptime_get();
-		//printk("TTotal loop time: %lli\n", t2-t1);
-		//k_msleep(1000);
-	}
-
-	/* Perform additional calibration steps, if necessary */
-	if(activeState == CALIBRATING){
-		// Rev 2
-		//const float test_Z_real = 179.636; 
-		//const float test_Z_imag = 0.043; 
-		// Rev 3
-		const float test_Z_real = 149.477; 
-		const float test_Z_imag = 0.070;
-
-		const float expected_calib_real = -63;
-		const float expected_calib_imag = 20;
-
-		float div_temp_real;
-		float div_temp_imag;
-
-		/* Read current calibration values as reference */
-		flash_read(flash_device, PAGE200, &calibMat, 32);
-
-		for(c=0; c<4; c++){
-			if (test_cfg->channelOn[c]){
-				div_temp_real = COMPLEX_DIVIDE_REAL(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
-				div_temp_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
-
-				/* Check if it matches what is expected before storing */
-				if (fabs(div_temp_real - expected_calib_real) < 20 && fabs(div_temp_imag - expected_calib_imag) < 30){
-					calibMat[c].Zfb_real = div_temp_real;
-					calibMat[c].Zfb_imag = div_temp_imag;
-				}
-			}
-		}
-
-		/* Send new values over uart*/
-		uart_write_32f(&calibMat, 8, 'C');
-
-		/* Write to flash memory */
-		//flash_write_protection_set(flash_device, false);
-		flash_erase(flash_device, PAGE200, 32);
-		flash_write(flash_device, PAGE200, &calibMat, 32);
-		printk("ECalibration Values Written to Memory\n");
-		//flash_write_protection_set(flash_device, true);
-		activeState = IDLE;
-		return;
-	}
-	/* Compare qcData struct to average of testDataMat */
-	else if(activeState == EQC){
-		uint8_t qcIndex = test_cfg->boardNumber; // Get Board Number Entered by user from GUI
-		float C_sum[4] = {0};
-		float G_sum[4] = {0};
-		float C_var[4] = {0};
-		float G_var[4] = {0};
-		struct impedance_data rmsd_noise[2] = {{.C = 0, .G = 0}};
-		
-		// Get Mean and RMS Deviation
-		for(c = 0; c < 4; c++){
-			for(i = 0; i < N_Measurements; i++){
-				C_sum[c] += testDataMat[i][c].C;
-				G_sum[c] += testDataMat[i][c].G;
-			}
-			C_sum[c] = C_sum[c] * 0.0333333f; 
-			G_sum[c] = G_sum[c] * 0.0333333f;
-
-			rmsd_noise[0].C += pow(qcData[qcIndex][c].C - C_sum[c], 2);
-			rmsd_noise[0].G += pow(qcData[qcIndex][c].G - G_sum[c], 2);
-		}
-		// Get Standard Deviation (noise)
-		for(c = 0; c < 4; c++){
-			for(i = 0; i < N_Measurements; i++){
-				C_var[c] += pow(testDataMat[i][c].C - C_sum[c], 2);
-				G_var[c] += pow(testDataMat[i][c].G - G_sum[c], 2);
-			}
-			rmsd_noise[1].C += C_var[c] * 0.033f;
-			rmsd_noise[1].G += G_var[c] * 0.033f;
-		}
-		// Calculate RMSD and noise across 4 chips
-		rmsd_noise[0].C = 0.5 * sqrt(rmsd_noise[0].C) * 0.3; // Magic numbers are to normalize over range and convert to %
-		rmsd_noise[0].G = 0.5 * sqrt(rmsd_noise[0].G) * 12.5;
-
-		rmsd_noise[1].C = 0.5 * sqrt(rmsd_noise[1].C); // In pF
-		rmsd_noise[1].G = 0.5 * sqrt(rmsd_noise[1].G);
-
-		// Write to User
-		uart_write_32f(&rmsd_noise, 4, 'Q');
-
-		// Return
-		activeState = IDLE;
-		return;
-	}
-	else{
-		/* Store Test Data in Flash */
-		// To Do...
-
 	}
 
 	/* Tell UI that test has completed */
@@ -1024,6 +888,27 @@ static void uart_write_singleChar(char character, bool useLF){
 		uart_poll_out(uart_dev, '\n');
 	}
 	return;
+}
+
+static void uart_write_16i(uint16_t* data, uint16_t numData, char messageCode){
+	char buffer[6];
+
+	uint16_t n, i, k = 0;
+	uart_poll_out(uart_dev, messageCode);
+	for (i = 0; i < numData; i++){
+		n = snprintf(buffer, 6, "%hu", *data);
+		n = (n > 6) ? 6: n;
+		for(k = 0; k < n; k++){
+			uart_poll_out(uart_dev, buffer[k]);
+		}
+		data++;
+		if (i+1 < numData){
+			uart_poll_out(uart_dev, '!');
+		}
+		else{
+			uart_poll_out(uart_dev, 0xA);
+		}
+	}
 }
 
 /* General write function that takes in a pointer to a 32b data, the number of data, and an id code */
