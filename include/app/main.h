@@ -4,9 +4,10 @@
 /* Configuration flags */
 #define ASSEMBLY_TESTING			0
 #define USE_REAL_DATA				1
+#define USE_ADC						0
 #define REAL_TIME					1
 #define SENDFILTEREDDATA			0
-#define NEW_PROCESSING_LOOP			1
+#define NEW_PROCESSING_LOOP			0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)

@@ -650,7 +650,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
         *(Vr_data + n) = 1;
     } */
 
-	/* Enable ADC and CC Drive */
+	/* Enable CC Drive */
 	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
 		printk("EError: Failed to setup CC Drive");
 		return -1;
@@ -723,14 +723,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 
 	/* Sets up necessary peripherals (DMA, SPI, Timers) for reads. */
-	#if USE_REAL_DATA
+	#if USE_ADC
 	ad4002_init_read(ad4002_master, ad4002_slave, Ve_data, Vr_data, SAMPLES_PER_COLLECTION);
 	ad4002_irq_callback_set(ad4002_master, &dma_tcie_callback);
 	#endif
 	volatile int64_t sleepTime, timeStamp; // Timing params for measuring speed
-
-	/* Timing Parameters */
-	int64_t startTime = k_uptime_get();
 
 	/* Set to continuous run if FREERUNNING enabled for debugging */
 	if (activeState == FREERUNNING){
@@ -748,7 +745,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		while(true){
 
 			/* Read Data from ADC */
-			#if USE_REAL_DATA
+			#if USE_ADC
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
@@ -770,6 +767,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	}
 	printk("Starting in 0 seconds\n");
 
+	/* Timing Parameters */
+	int64_t startTime = k_uptime_get();
+	
 	for(i = 0; i < N_Measurements; i++){
 
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
@@ -798,7 +798,9 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 
 			/* Perform Initial Read */
+			#if USE_ADC
 			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+			#endif
 			k_msleep(2); // Thread sleeps until DMA callback is triggered
 
 			#if NEW_PROCESSING_LOOP
@@ -819,14 +821,17 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 			/* Begin looping and processing */
 			timeStamp = k_uptime_get() - startTime;
-			while(timeStamp + 1200 < (10000*i + (c+1)*2500)){
+			while(timeStamp + 2000 < (10000*i + (c+1)*2500)){
 
 				/* Read Data from ADC */
+				#if USE_ADC
 				ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
+				#endif
 				k_msleep(2); // Thread sleeps until DMA callback is triggered
 
 				//t2 = k_uptime_get();
 				/* Copy data to safe memory location */ 
+				#if USE_ADC
 				memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
 				memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
 
@@ -857,8 +862,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				/* Finally, compute Z */
 				Z_temp_real = COMPLEX_DIVIDE_REAL(Ve_real, Ve_imag, Vr_real, Vr_imag);
 				Z_temp_imag = COMPLEX_DIVIDE_IMAG(Ve_real, Ve_imag, Vr_real, Vr_imag);
-				#endif
-				
+				#endif /* NEW_PROCESSING_LOOP */
+				#endif /* USE_ADC*/
 				/* Get Timestamp to see if another measurement can be taken */
 				timeStamp = k_uptime_get() - startTime;
 			}
@@ -868,6 +873,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			uart_write_16i(&Vr_data_safe[0], 1050, c+65);
 
 			timeStamp = k_uptime_get() - startTime;
+			printk("Time: %lli\n", timeStamp);
 
 			/* Sleep until next collection period */
 			sleepTime = (test_cfg->collectionInterval) * (1000*(i) + (c+1)*250) - timeStamp;
