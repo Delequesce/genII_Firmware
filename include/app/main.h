@@ -6,6 +6,7 @@
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
 #define SENDFILTEREDDATA			0
+#define SENDALLDATA					1
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -60,7 +61,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					20
+#define N_AVERAGES					10
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -167,13 +168,20 @@ struct outputParams{
 	float smaxTime;
 };
 
+#if SENDALLDATA
+struct dataWriteStruct{
+	float timeStamp;
+	struct impedance_data impDat[N_CHANNELS_MAX*N_AVERAGES];
+	struct outputParams opDat[N_CHANNELS_MAX];
+};
+#else
 /* Write Structure contains 1 timestamp and impedance/output params for each channel */
 struct dataWriteStruct{
 	float timeStamp;
 	struct impedance_data impDat[N_CHANNELS_MAX];
 	struct outputParams opDat[N_CHANNELS_MAX];
 };
-
+#endif
 /* Other global Variables */
 static float heater_errI;
 static bool deviceConnected = false;

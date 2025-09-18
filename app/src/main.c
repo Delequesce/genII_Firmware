@@ -849,7 +849,20 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					#endif
 
 					/* Package into single data structure */
+					#if SENDALLDATA
+					/* Calculate C and G for all averages */
+					for(j = 0; j < N_AVERAGES; j++){
+						Z_real = Z_real_Mat[j];
+						Z_imag = Z_imag_Mat[j];
+						mag2Z = Z_real*Z_real + Z_imag*Z_imag;
+						testDataMat_lite[c].G = 1000 * Z_real/mag2Z;
+						testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z;
+						dwStruct.impDat[j + c*N_AVERAGES] = testDataMat_lite[c];
+					}
+					#else
 					dwStruct.impDat[c] = testDataMat_lite[c];
+					#endif /* SEND ALL DATA*/
+
 					dwStruct.opDat[c] = opData[c];
 				}
 			}
@@ -883,7 +896,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		if (activeState == TESTRUNNING){
 
 			/* Total write at 115200 baud should take 8-10 msec */
+			#if SENDALLDATA
+			uart_write_32f(&dwStruct, 21 + 8*N_AVERAGES, 'D');
+			#else 
 			uart_write_32f(&dwStruct, 29, 'D');
+			#endif
 
 		}
 
