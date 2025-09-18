@@ -646,11 +646,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 
 	static struct impedance_data testDataMat_lite[4] = {0};
 
-	/*for(uint32_t n = 0; n < SAMPLES_PER_COLLECTION; n++){
-        *(Ve_data + n) = 1;
-        *(Vr_data + n) = 1;
-    } */
-
 	/* Enable ADC and CC Drive */
 	if (pwm_set_cycles(ccDriver.dev, ccDriver.channel, V_SIG_PERIOD, V_SIG_PERIOD/2, ccDriver.flags) < 0){
 		printk("EError: Failed to setup CC Drive");
@@ -692,10 +687,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		.slp = 0,
 	}};
 
-	struct dataWriteStruct dwStruct[N_CHANNELS_MAX] = {{
-		.impDat = {0}, 
-		.opDat = {0},
-	}};
+	struct dataWriteStruct dwStruct = {
+		.timeStamp = 0,
+		.impDat = {{0}}, 
+		.opDat = {{0}},
+	};
 
 	static float ma_buf0[MA_BUF_N];
     static float ma_buf1[MA_BUF_N];
@@ -732,8 +728,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
 
+		/* Get Timestamp for current measurement period and cast to float for writing */
+		dwStruct.timeStamp = (float) (0.001 * (k_uptime_get() - startTime));
+
 		/* This loop runs to obtain repeat measurements over the collection frequency interval */
-		//t1 = k_uptime_get();
 
 		/* Run Loop for Each Channel */
 		for(c = 0; c < N_CHANNELS_MAX; c++){
@@ -851,8 +849,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					#endif
 
 					/* Package into single data structure */
-					dwStruct[c].impDat = testDataMat_lite[c];
-					dwStruct[c].opDat = opData[c];
+					dwStruct.impDat[c] = testDataMat_lite[c];
+					dwStruct.opDat[c] = opData[c];
 				}
 			}
 			#else 
@@ -885,7 +883,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		if (activeState == TESTRUNNING){
 
 			/* Total write at 115200 baud should take 8-10 msec */
-			uart_write_32f(&dwStruct[0], 28, 'D');
+			uart_write_32f(&dwStruct, 29, 'D');
 
 		}
 

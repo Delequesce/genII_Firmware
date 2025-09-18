@@ -60,7 +60,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					50
+#define N_AVERAGES					20
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
@@ -167,10 +167,11 @@ struct outputParams{
 	float smaxTime;
 };
 
-/* Total size is 7 floats per channel = 28 floats = 112 bytes. Will Take around 8 msec to transmit at 115200 baud*/
+/* Write Structure contains 1 timestamp and impedance/output params for each channel */
 struct dataWriteStruct{
-	struct impedance_data impDat;
-	struct outputParams opDat;
+	float timeStamp;
+	struct impedance_data impDat[N_CHANNELS_MAX];
+	struct outputParams opDat[N_CHANNELS_MAX];
 };
 
 /* Other global Variables */
