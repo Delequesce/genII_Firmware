@@ -377,6 +377,7 @@ static void uartIOThread_entry_point(){
 						test_cfg.channelOn[1] = p_char[1] & 0x2;
 						test_cfg.channelOn[2] = p_char[1] & 0x4;
 						test_cfg.channelOn[3] = p_char[1] & 0x8;
+						uart_write_singleChar('K', true);
 						break;
 					case 'N': // New Test
 						activeState = TESTRUNNING;
@@ -728,37 +729,6 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	/* Timing Parameters */
 	int64_t startTime = k_uptime_get();
 
-	/* Set to continuous run if FREERUNNING enabled for debugging */
-	if (activeState == FREERUNNING){
-		printk("Now Entering Free Run Debug Mode\n");
-		/* Set Channel 1 to always on */
-		c = 0;
-		if (gpio_pin_configure_dt(&tia_1_shdn_low, tia_shdn_states[c+3]) < 0 || 
-				gpio_pin_configure_dt(&tia_2_shdn_low, tia_shdn_states[c+2]) < 0 || 
-				gpio_pin_configure_dt(&tia_3_shdn_low, tia_shdn_states[c+1]) < 0 ||
-				gpio_pin_configure_dt(&tia_4_shdn_low, tia_shdn_states[c]) < 0) {
-				printk("ETIA Multiplexing Error");
-				return 0;
-			}
-
-		while(true){
-
-			/* Read Data from ADC */
-			#if USE_REAL_DATA
-			ad4002_start_read(ad4002_master, SAMPLES_PER_COLLECTION);
-			k_msleep(2); // Thread sleeps until DMA callback is triggered
-
-			//t2 = k_uptime_get();
-			/* Copy data to safe memory location */ 
-			memcpy(Ve_data_safe, Ve_data, SAMPLES_PER_COLLECTION*2);
-			memcpy(Vr_data_safe, Vr_data, SAMPLES_PER_COLLECTION*2);
-			k_msleep(1);
-			#endif
-
-		}
-		return;
-	}
-
 	/* This loop runs each collection for the entire test run time (outer loop) */
 	for(i = 0; i < N_Measurements; i++){
 
@@ -770,6 +740,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			
 			/* If channel is not active, skip collection */
 			if(!test_cfg->channelOn[c]){
+				timeStamp = k_uptime_get() - startTime;
+				//printk("Time: %lli\n", timeStamp);
+
+				/* Sleep until next collection period */
+				sleepTime = (test_cfg->collectionInterval) * (1000*(i) + (c+1)*200) - timeStamp;
+			
+				k_msleep(sleepTime);
 				continue;
 			}
 
@@ -781,6 +758,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				printk("ETIA Multiplexing Error");
 				return 0;
 			}
+
+			k_msleep(5); // Wait 5 msec for channel switching to take effect
 
 			/* Perform Initial Read */
 			#if USE_REAL_DATA
@@ -865,7 +844,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 					/* Function to calculate Output Parameters and moving average */
-					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+					//calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
 					
 					#if SENDFILTEREDDATA 
 					testDataMat_lite[c].C = cpv[c].x_ma;
@@ -892,6 +871,14 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			dwStruct[c].opDat = opData[c];
 
 			#endif
+
+			timeStamp = k_uptime_get() - startTime;
+			//printk("Time: %lli\n", timeStamp);
+
+			/* Sleep until next collection period */
+			sleepTime = (test_cfg->collectionInterval) * (1000*(i) + (c+1)*200) - timeStamp;
+		
+			k_msleep(sleepTime);
 		}
 
 		/* Send data over uart */

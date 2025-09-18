@@ -60,7 +60,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					100
+#define N_AVERAGES					50
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10
