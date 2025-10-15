@@ -6,7 +6,7 @@
 #define USE_REAL_DATA				1
 #define REAL_TIME					1
 #define SENDFILTEREDDATA			0
-#define SENDALLDATA					1
+#define SENDALLDATA					0
 
 /* DT NODELABELS */
 #define CCDRIVER	        		DT_ALIAS(my_ccdrive)
@@ -61,7 +61,7 @@
 /* Measurement params */
 #define SAMPLES_PER_COLLECTION  	1050
 #define N_FFT						1024
-#define N_AVERAGES					10
+#define N_AVERAGES					50
 #define SLEEP_TIME_MS 				4
 #define DEFAULT_COLLECTION_INTERVAL	1
 #define DEFAULT_CALIBRATION_TIME	10

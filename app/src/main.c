@@ -757,7 +757,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				return 0;
 			}
 
-			k_msleep(50); // Wait 5 msec for channel switching to take effect
+			k_msleep(5); // Wait 5 msec for channel switching to take effect
 
 			/* Perform Initial Read */
 			#if USE_REAL_DATA
