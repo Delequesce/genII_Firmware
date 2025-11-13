@@ -34,7 +34,7 @@ static struct test_config test_cfg = {
 };
 
 /* Load with default values */
-static struct calibration_data calibMat[4] = {
+ static struct calibration_data calibMat[4] = {
 	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
 	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
 	{DEFAULT_ZFB_REAL, DEFAULT_ZFB_IMAG},
@@ -634,6 +634,13 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 	 * If normal test is running, load the most recent calibration. 
 	 * If test is for calibration, use default values for easy calibration. 
 	*/
+	/* Load Default Values */
+	for (volatile int n = 0; n < 4; n++){
+		calibMat[n].Zfb_real = DEFAULT_ZFB_REAL;
+		calibMat[n].Zfb_imag = DEFAULT_ZFB_IMAG;
+	}
+
+	/* Overwrite with memory stored values if not calibrating */
 	if (activeState != CALIBRATING){
 		flash_read(flash_device, PAGE200, &calibMat, 32);
 	}
@@ -826,8 +833,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
 				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
-				//printk("EZ_real: %0.4f\n", Z_real_mean);
-				//printk("EZ_imag: %0.4f\n", Z_imag_mean);
+				printk("EZ_real: %0.4f\n", Z_real_mean);
+				printk("EZ_imag: %0.4f\n", Z_imag_mean);
 			}
 			else{
 				/* Final Calculation and storage */
@@ -927,11 +934,11 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		//const float test_Z_real = 179.636; 
 		//const float test_Z_imag = 0.043; 
 		// Rev 3
-		const float test_Z_real = 149.477; 
-		const float test_Z_imag = 0.070;
+		const float test_Z_real = 150.1; 
+		const float test_Z_imag = 0.040;
 
 		const float expected_calib_real = -63;
-		const float expected_calib_imag = 20;
+		const float expected_calib_imag = -20;
 
 		float div_temp_real;
 		float div_temp_imag;
@@ -945,10 +952,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 				div_temp_imag = COMPLEX_DIVIDE_IMAG(test_Z_real, test_Z_imag, Z_real_mean[c], Z_imag_mean[c]);
 
 				/* Check if it matches what is expected before storing */
-				if (fabs(div_temp_real - expected_calib_real) < 20 && fabs(div_temp_imag - expected_calib_imag) < 30){
-					calibMat[c].Zfb_real = div_temp_real;
-					calibMat[c].Zfb_imag = div_temp_imag;
-				}
+				//if (fabs(div_temp_real - expected_calib_real) < 20 && fabs(div_temp_imag - expected_calib_imag) < 30){
+				calibMat[c].Zfb_real = div_temp_real;
+				calibMat[c].Zfb_imag = div_temp_imag;
+				//}
 			}
 		}
 
