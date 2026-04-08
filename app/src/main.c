@@ -63,7 +63,8 @@ static float Z_real_Mat[N_AVERAGES] = {0};
 static float Z_imag_Mat[N_AVERAGES] = {0};
 
 static const struct impedance_data qcData[5][4] = {
-	{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
+	//{{.C = 46.5, .G = 5.57}, {.C = 101.5, .G = 2.57}, {.C = 230.0, .G = 10.05}, {.C = 324.6, .G = 5.02}},
+	{{.C = 46.3, .G = 6.656}, {.C = 101.6, .G = 2.558}, {.C = 227.3, .G = 9.980}, {.C = 331.5, .G = 6.660}},
 	{{.C = 48.0, .G = 6.688}, {.C = 229.9, .G = 10.080}, {.C = 98.8, .G = 2.570}, {.C = 326.6, .G = 6.686}},
 	{{.C = 47.2, .G = 6.689}, {.C = 99.4, .G = 2.571}, {.C = 230.0, .G = 10.037}, {.C = 319.5, .G = 6.691}},
 	{{.C = 47.2, .G = 6.692}, {.C = 100.1, .G = 2.572}, {.C = 224.9, .G = 10.033}, {.C = 324.3, .G = 6.683}},
@@ -833,8 +834,8 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			if (activeState == CALIBRATING){
 				Z_real_mean[c] = (Z_real_mean[c] * i + Z_real)/(i+1);
 				Z_imag_mean[c] = (Z_imag_mean[c] * i + Z_imag)/(i+1);
-				printk("EZ_real: %0.4f\n", Z_real_mean);
-				printk("EZ_imag: %0.4f\n", Z_imag_mean);
+				//printk("EZ_real: %0.4f\n", Z_real_mean);
+				//printk("EZ_imag: %0.4f\n", Z_imag_mean);
 			}
 			else{
 				/* Final Calculation and storage */
@@ -849,7 +850,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 					testDataMat_lite[c].G = 1000 * Z_real/mag2Z;				// Result is in mS
 					testDataMat_lite[c].C = 159154.943091895f * Z_imag/mag2Z; // magic number is 1e12 / (2*pi*1e6). Result is in pF
 					/* Function to calculate Output Parameters and moving average */
-					//calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
+					calculateParameters(&cbt[c], i, testDataMat_lite[c].C, &opData[c], &cpv[c], &flags[c]);
 					
 					#if SENDFILTEREDDATA 
 					testDataMat_lite[c].C = cpv[c].x_ma;
@@ -978,7 +979,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		float G_sum[4] = {0};
 		float C_var[4] = {0};
 		float G_var[4] = {0};
-		struct impedance_data rmsd_noise[2] = {{.C = 0, .G = 0}};
+		struct impedance_data rmsd_noise[6] = {{.C = 0, .G = 0}}; // 4 channels of data + rmsd and noise 
 		
 		// Get Mean and RMS Deviation
 		for(c = 0; c < 4; c++){
@@ -988,6 +989,10 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 			}
 			C_sum[c] = C_sum[c] * 0.0333333f; 
 			G_sum[c] = G_sum[c] * 0.0333333f;
+
+			// Store absolute error for each channel
+			rmsd_noise[c+2].C = C_sum[c] - qcData[qcIndex][c].C;
+			rmsd_noise[c+2].G = G_sum[c] - qcData[qcIndex][c].G;
 
 			rmsd_noise[0].C += pow(qcData[qcIndex][c].C - C_sum[c], 2);
 			rmsd_noise[0].G += pow(qcData[qcIndex][c].G - G_sum[c], 2);
@@ -1009,7 +1014,7 @@ static void testThread_entry_point(const struct test_config* test_cfg, void *unu
 		rmsd_noise[1].G = 0.5 * sqrt(rmsd_noise[1].G);
 
 		// Write to User
-		uart_write_32f(&rmsd_noise, 4, 'Q');
+		uart_write_32f(&rmsd_noise, 12, 'Q');
 
 		// Return
 		activeState = IDLE;
