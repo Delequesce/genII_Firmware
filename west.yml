@@ -12,7 +12,7 @@ manifest:
   projects:
     - name: zephyr
       remote: zephyrproject-rtos
-      revision: main
+      revision: v3.7.0
       import:
         # By using name-allowlist we can clone only the modules that are
         # strictly needed by the application.
@@ -21,4 +21,4 @@ manifest:
           - hal_stm32  # required by the nucleo_f302r8 board (STM32 based)
   
   self:
-    path: genII_App/app
+    path: genII_Firmware/app
